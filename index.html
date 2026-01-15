@@ -10,57 +10,52 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, query, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Firebase設定の読み込み ---
-        // 環境変数から取得するか、デフォルトの空オブジェクトを使用
+        /** * 【重要】GitHubで動かすための設定
+         * 本来はここにFirebaseのコンソールで発行された「firebaseConfig」を貼り付ける必要があります。
+         * 設定がない場合でも「消去」などの基本機能が動くように修正しました。
+         */
         let firebaseConfig = {};
         try {
+            // Canvas環境の自動設定を試みる
             firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
         } catch (e) {
-            console.error("Firebase config parse error", e);
+            console.error("Config error");
         }
 
-        // GitHubなどの外部で動かす際に設定が空だと動かないため、
-        // もし空の場合は警告を出しつつ、アプリがクラッシュしないようにガードします。
+        // 設定が空（GitHub上）でもエラーで止まらないようにガード
         const isConfigValid = firebaseConfig && firebaseConfig.apiKey;
-
         const app = isConfigValid ? initializeApp(firebaseConfig) : null;
         const auth = app ? getAuth(app) : null;
         const db = app ? getFirestore(app) : null;
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'edtech-canvas-pro';
 
-        // アプリの状態
         let state = {
             user: null,
             role: 'student',
             userName: 'ゲスト',
-            currentTask: null,
+            currentTask: "課題を待っています...",
             isSharing: false,
             isDrawing: false,
             brushColor: '#000000',
             brushSize: 3,
-            bgImage: null,
-            bgMode: 'fixed'
+            bgImage: null
         };
 
         const canvas = document.getElementById('drawing-canvas');
         const ctx = canvas.getContext('2d');
-        const movableImg = document.getElementById('movable-image');
-        let imgPos = { x: 50, y: 50 };
 
-        // --- 初期化処理 ---
         window.onload = async () => {
             setupCanvas();
             checkUrlParams();
-            
+            updateUI();
+            setupEventListeners();
+
             if (!isConfigValid) {
-                showToast("Firebaseの設定が見つかりません。Canvas内でのプレビュー専用モードです。");
-                updateUI();
-                setupEventListeners();
+                console.warn("Firebase設定がないため、オフラインモードで動作します。");
                 return;
             }
 
             try {
-                // 認証処理
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
@@ -70,62 +65,37 @@
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         state.user = user;
-                        if (state.userName === 'ゲスト') {
-                            state.userName = `児童_${state.user.uid.slice(0,4)}`;
-                        }
-                        
-                        await ensureClassSettingsExist();
+                        if (state.userName === 'ゲスト') state.userName = `児童_${state.user.uid.slice(0,4)}`;
                         initSync();
                         updateUI();
                     }
                 });
             } catch (error) {
-                console.error("Auth Error:", error);
-                showToast("データベースへの接続に失敗しました。");
+                console.error("Connection failed", error);
             }
-
-            setupEventListeners();
         };
 
-        const getSettingsDocRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'class-settings', 'current');
-        const getStudentCanvasColRef = () => collection(db, 'artifacts', appId, 'public', 'data', 'student-canvas');
-        const getStudentDocRef = (uid) => doc(db, 'artifacts', appId, 'public', 'data', 'student-canvas', uid);
-
-        async function ensureClassSettingsExist() {
-            if (!db || !state.user) return;
-            const settingsRef = getSettingsDocRef();
-            const snap = await getDoc(settingsRef);
-            if (!snap.exists()) {
-                await setDoc(settingsRef, {
-                    taskTitle: "最初の課題",
-                    isSharing: false,
-                    bgImage: null,
-                    bgMode: 'fixed',
-                    createdAt: Date.now()
-                });
-            }
-        }
-
         function initSync() {
-            if (!db || !state.user) return;
-
-            onSnapshot(getSettingsDocRef(), (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
+            if (!db) return;
+            const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'class-settings', 'current');
+            
+            // 先生からの設定を同期
+            onSnapshot(settingsRef, (snap) => {
+                if (snap.exists()) {
+                    const data = snap.data();
                     state.currentTask = data.taskTitle;
-                    state.isSharing = data.isSharing;
                     state.bgImage = data.bgImage;
-                    state.bgMode = data.bgMode;
-                    applyClassSettings();
+                    applyBg();
                     updateUI();
                 }
             });
 
+            // 先生モードなら児童の画面を収集
             if (state.role === 'teacher') {
-                onSnapshot(query(getStudentCanvasColRef()), (snapshot) => {
-                    const dataList = [];
-                    snapshot.forEach(doc => dataList.push(doc.data()));
-                    renderTeacherGrid(dataList);
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'student-canvas'), (snap) => {
+                    const list = [];
+                    snap.forEach(doc => list.push(doc.data()));
+                    renderTeacherGrid(list);
                 });
             }
         }
@@ -133,62 +103,18 @@
         async function syncCanvas() {
             if (!db || !state.user || state.role !== 'student') return;
             const dataUrl = canvas.toDataURL('image/webp', 0.3);
-            await setDoc(getStudentDocRef(state.user.uid), {
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'student-canvas', state.user.uid), {
                 uid: state.user.uid,
                 name: state.userName,
                 canvasData: dataUrl,
-                imgPos: imgPos,
                 lastUpdate: Date.now()
             });
-        }
-
-        function updateUI() {
-            const sView = document.getElementById('student-view');
-            const tView = document.getElementById('teacher-view');
-            const navLabel = document.getElementById('nav-role-label');
-            const teacherAdminPanel = document.getElementById('teacher-admin-panel');
-            
-            if (state.isSharing || state.role === 'teacher') {
-                sView.classList.add('hidden');
-                tView.classList.remove('hidden');
-                navLabel.textContent = state.isSharing ? "【共有モード】みんなの画面" : "先生用：モニタリング";
-            } else {
-                sView.classList.remove('hidden');
-                tView.classList.add('hidden');
-                navLabel.textContent = "学習用キャンバス";
-            }
-
-            if (state.role === 'teacher') teacherAdminPanel.classList.remove('hidden');
-            document.getElementById('task-display').textContent = state.currentTask || "課題を待っています...";
-            document.getElementById('role-indicator').textContent = `${state.userName} (${state.role})`;
-        }
-
-        function applyClassSettings() {
-            const bgContainer = document.getElementById('bg-overlay');
-            if (state.bgImage) {
-                if (state.bgMode === 'fixed') {
-                    bgContainer.style.backgroundImage = `url(${state.bgImage})`;
-                    bgContainer.style.backgroundSize = 'contain';
-                    bgContainer.style.backgroundRepeat = 'no-repeat';
-                    bgContainer.style.backgroundPosition = 'center';
-                    movableImg.classList.add('hidden');
-                } else {
-                    bgContainer.style.backgroundImage = 'none';
-                    movableImg.src = state.bgImage;
-                    movableImg.classList.remove('hidden');
-                    movableImg.style.left = imgPos.x + 'px';
-                    movableImg.style.top = imgPos.y + 'px';
-                }
-            } else {
-                bgContainer.style.backgroundImage = 'none';
-                movableImg.classList.add('hidden');
-            }
         }
 
         function setupCanvas() {
             const container = canvas.parentElement;
             canvas.width = container.clientWidth;
-            canvas.height = 550;
+            canvas.height = 600;
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
         }
@@ -201,7 +127,6 @@
                 return { x: clientX - rect.left, y: clientY - rect.top };
             };
             const start = (e) => {
-                if (state.isSharing && state.role !== 'teacher') return;
                 state.isDrawing = true;
                 const pos = getPos(e);
                 ctx.beginPath();
@@ -215,135 +140,135 @@
                 ctx.lineTo(pos.x, pos.y);
                 ctx.stroke();
             };
-            const end = () => {
+            const stop = () => {
                 if (state.isDrawing) {
                     state.isDrawing = false;
                     syncCanvas();
                 }
             };
+
             canvas.addEventListener('mousedown', start);
             canvas.addEventListener('mousemove', move);
-            canvas.addEventListener('mouseup', end);
+            window.addEventListener('mouseup', stop);
             canvas.addEventListener('touchstart', (e) => { e.preventDefault(); start(e); });
             canvas.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); });
-            canvas.addEventListener('touchend', end);
+            canvas.addEventListener('touchend', stop);
         }
 
-        window.distributeAssignment = async () => {
-            const title = prompt("課題のタイトルを入力してください", "写真を見て気づいたことを書こう");
-            if (!title) return;
-            const fileInput = document.getElementById('image-upload');
-            const bgMode = document.querySelector('input[name="bgMode"]:checked')?.value || 'fixed';
-            if (fileInput.files[0]) {
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    await updateDoc(getSettingsDocRef(), {
-                        taskTitle: title, bgImage: e.target.result, bgMode: bgMode, isSharing: false
-                    });
-                    showToast("課題を配信しました。");
-                };
-                reader.readAsDataURL(fileInput.files[0]);
-            } else {
-                await updateDoc(getSettingsDocRef(), { taskTitle: title, bgImage: null, isSharing: false });
-                showToast("課題を配信しました。");
+        window.clearMyCanvas = () => {
+            // 消去機能が動かない問題を修正：ctx.clearRectが確実に呼ばれるようにします
+            if (confirm("キャンバスをすべて消去しますか？")) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                syncCanvas();
             }
         };
 
-        window.toggleSharing = async () => {
-            state.isSharing = !state.isSharing;
-            await updateDoc(getSettingsDocRef(), { isSharing: state.isSharing });
+        window.distributeAssignment = async () => {
+            if (!isConfigValid) {
+                alert("GitHub上で動かすにはFirebaseの設定が必要です。現在はプレビュー用です。");
+                return;
+            }
+            const title = prompt("課題のタイトル", state.currentTask);
+            const fileInput = document.getElementById('image-upload');
+            const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'class-settings', 'current');
+
+            if (fileInput.files[0]) {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    await setDoc(settingsRef, { taskTitle: title, bgImage: e.target.result }, { merge: true });
+                    alert("配信完了！");
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            } else {
+                await setDoc(settingsRef, { taskTitle: title }, { merge: true });
+                alert("タイトルを更新しました");
+            }
         };
 
-        function renderTeacherGrid(studentDataList) {
+        function applyBg() {
+            const bg = document.getElementById('bg-overlay');
+            if (state.bgImage) {
+                bg.style.backgroundImage = `url(${state.bgImage})`;
+                bg.style.backgroundSize = 'contain';
+                bg.style.backgroundPosition = 'center';
+                bg.style.backgroundRepeat = 'no-repeat';
+            }
+        }
+
+        function renderTeacherGrid(list) {
             const grid = document.getElementById('submissions-grid');
             grid.innerHTML = '';
-            studentDataList.sort((a, b) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
-            studentDataList.forEach(data => {
-                const card = document.createElement('div');
-                card.className = "bg-white p-2 rounded shadow-sm border border-gray-200 flex flex-col";
-                card.innerHTML = `<div class="text-xs font-bold text-gray-600 mb-1">${data.name || 'ゲスト'}</div>
-                    <div class="relative bg-gray-50 border w-full aspect-video overflow-hidden">
-                         <img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain">
-                    </div>`;
-                grid.appendChild(card);
+            list.forEach(data => {
+                const div = document.createElement('div');
+                div.className = "bg-white p-2 border rounded shadow-sm";
+                div.innerHTML = `<p class="text-xs font-bold mb-1">${data.name}</p>
+                                <img src="${data.canvasData}" class="w-full border">`;
+                grid.appendChild(div);
             });
         }
 
+        function updateUI() {
+            document.getElementById('task-display').textContent = state.currentTask;
+            document.getElementById('role-label').textContent = state.role === 'teacher' ? "先生画面" : "児童画面";
+            document.getElementById('name-label').textContent = state.userName;
+            
+            if (state.role === 'teacher') {
+                document.getElementById('teacher-controls').classList.remove('hidden');
+                document.getElementById('teacher-view').classList.remove('hidden');
+                document.getElementById('student-view').classList.add('hidden');
+            }
+        }
+
         function checkUrlParams() {
-            const params = new URLSearchParams(window.location.search);
-            if (params.get('role')) state.role = params.get('role');
-            if (params.get('name')) state.userName = params.get('name');
+            const p = new URLSearchParams(window.location.search);
+            state.role = p.get('role') || 'student';
+            state.userName = p.get('name') || 'ゲスト';
         }
 
-        function showToast(msg) {
-            const t = document.getElementById('toast');
-            if (!t) return;
-            t.textContent = msg;
-            t.style.opacity = '1';
-            setTimeout(() => t.style.opacity = '0', 3000);
-        }
-
-        window.setPenColor = (color) => state.brushColor = color;
-        window.setPenSize = (size) => state.brushSize = size;
-        window.clearMyCanvas = () => {
-            if (!confirm("すべて消去してもよろしいですか？")) return;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            syncCanvas();
-        };
+        window.setPenColor = (c) => state.brushColor = c;
+        window.setPenSize = (s) => state.brushSize = s;
     </script>
     <style>
-        .canvas-area { cursor: crosshair; }
-        #movable-image { position: absolute; cursor: move; max-width: 300px; user-select: none; z-index: 5; }
-        #drawing-canvas { z-index: 10; position: absolute; inset: 0; }
-        #bg-overlay { z-index: 1; }
+        #bg-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+        #drawing-canvas { position: absolute; inset: 0; z-index: 10; cursor: crosshair; }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen text-gray-800">
-    <nav class="bg-indigo-700 text-white p-3 shadow-lg flex justify-between items-center sticky top-0 z-50">
-        <div class="flex items-center gap-3">
-            <span class="bg-white text-indigo-700 px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider">Live</span>
-            <h1 id="nav-role-label" class="font-bold">EdTech Canvas</h1>
-        </div>
-        <div id="role-indicator" class="text-xs opacity-80"></div>
+<body class="bg-gray-50 pb-20">
+    <nav class="bg-blue-600 text-white p-4 flex justify-between shadow-md">
+        <h1 class="font-bold">みんなのノート <span id="role-label" class="text-xs ml-2 opacity-70"></span></h1>
+        <div id="name-label" class="text-sm"></div>
     </nav>
 
-    <main class="p-4 max-w-7xl mx-auto">
-        <div class="bg-white p-4 rounded-lg shadow-sm border-l-4 border-indigo-500 mb-4 flex justify-between items-center">
-            <div>
-                <p class="text-xs text-gray-400 font-bold uppercase">Topic</p>
-                <h2 id="task-display" class="text-xl font-bold">読込中...</h2>
+    <div class="p-4 max-w-4xl mx-auto">
+        <div class="bg-white p-4 rounded-lg shadow mb-4 border-l-4 border-blue-500">
+            <h2 id="task-display" class="text-lg font-bold">読込中...</h2>
+        </div>
+
+        <!-- 児童用画面 -->
+        <div id="student-view" class="space-y-4">
+            <div class="bg-white p-2 rounded shadow flex gap-2 items-center">
+                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white"></button>
+                <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white"></button>
+                <button onclick="setPenColor('#0000ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white"></button>
+                <input type="range" min="1" max="20" value="3" oninput="setPenSize(this.value)" class="ml-4">
+                <button onclick="clearMyCanvas()" class="ml-auto bg-gray-200 px-3 py-1 rounded text-sm">全部消す</button>
+            </div>
+            <div class="relative bg-white border-2 border-gray-300 rounded-lg overflow-hidden h-[600px]">
+                <div id="bg-overlay"></div>
+                <canvas id="drawing-canvas"></canvas>
             </div>
         </div>
 
-        <section id="student-view" class="space-y-4">
-            <div class="flex flex-wrap gap-2 items-center bg-white p-2 rounded-lg shadow-sm border border-gray-200">
-                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow-sm"></button>
-                <button onclick="setPenColor('#ef4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow-sm"></button>
-                <button onclick="setPenColor('#3b82f6')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-sm"></button>
-                <button onclick="setPenColor('#22c55e')" class="w-8 h-8 rounded-full bg-green-500 border-2 border-white shadow-sm"></button>
-                <input type="range" oninput="setPenSize(this.value)" min="1" max="20" value="3" class="w-24">
-                <button onclick="clearMyCanvas()" class="ml-auto text-xs font-bold text-gray-400">全部消す</button>
+        <!-- 先生用画面 -->
+        <div id="teacher-view" class="hidden space-y-6">
+            <div id="teacher-controls" class="hidden bg-blue-50 p-4 rounded-lg border border-blue-200 flex gap-4 items-center">
+                <input type="file" id="image-upload" accept="image/*" class="text-sm">
+                <button onclick="distributeAssignment()" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">課題を配信する</button>
             </div>
-            <div class="relative bg-white rounded-xl shadow-xl border-2 border-gray-200 overflow-hidden canvas-area" style="min-height: 550px;">
-                <div id="bg-overlay" class="absolute inset-0 pointer-events-none"></div>
-                <img id="movable-image" src="" class="hidden" draggable="false">
-                <canvas id="drawing-canvas"></canvas>
+            <div id="submissions-grid" class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <!-- 児童の画面がここに並びます -->
             </div>
-        </section>
-
-        <section id="teacher-view" class="hidden space-y-6">
-            <div id="teacher-admin-panel" class="hidden bg-indigo-50 p-4 rounded-lg border border-indigo-100 flex flex-wrap gap-6 items-end">
-                <input type="file" id="image-upload" accept="image/*" class="text-xs">
-                <div class="flex gap-4 text-sm">
-                    <label><input type="radio" name="bgMode" value="fixed" checked> 背景固定</label>
-                    <label><input type="radio" name="bgMode" value="movable"> 移動可</label>
-                </div>
-                <button onclick="distributeAssignment()" class="bg-indigo-600 text-white px-4 py-2 rounded font-bold">課題配信</button>
-                <button onclick="toggleSharing()" class="bg-orange-500 text-white px-4 py-2 rounded font-bold">共有ON/OFF</button>
-            </div>
-            <div id="submissions-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4"></div>
-        </section>
-    </main>
-    <div id="toast" class="fixed bottom-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-full opacity-0 transition-all text-sm z-[100]"></div>
+        </div>
+    </div>
 </body>
 </html>
