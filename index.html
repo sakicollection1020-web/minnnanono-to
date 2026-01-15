@@ -415,13 +415,17 @@
             offscreen.width = taskCreateCanvas.width;
             offscreen.height = taskCreateCanvas.height;
             const octx = offscreen.getContext('2d');
+            
+            // 重要な修正: ベースを完全に白く塗ることで配信後の透過を防ぐ
             octx.fillStyle = "white";
             octx.fillRect(0, 0, offscreen.width, offscreen.height);
+            
             for (let imgData of state.floatingImages) {
                 octx.drawImage(imgData.img, imgData.x, imgData.y, imgData.w, imgData.h);
             }
             octx.drawImage(taskCreateCanvas, 0, 0);
-            const finalDataUrl = offscreen.toDataURL('image/webp', 0.5);
+            
+            const finalDataUrl = offscreen.toDataURL('image/webp', 0.8); // 画質も少し向上
             if (confirm("この内容で全児童に配信しますか？")) {
                 await setDoc(doc(db, 'class-settings', 'current'), { 
                     taskTitle: title, 
@@ -438,7 +442,6 @@
             const modal = document.getElementById('feedback-modal');
             modal.classList.remove('hidden');
             
-            // レイアウト調整
             const container = feedbackCanvas.parentElement;
             const rect = container.getBoundingClientRect();
             feedbackCanvas.width = rect.width;
@@ -523,7 +526,8 @@
                 const div = document.createElement('div');
                 div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[160px] overflow-hidden";
                 
-                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain opacity-50 z-10">` : '';
+                // 重要な修正: 一覧画面でも背景をしっかり表示
+                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10">` : '';
                 const canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20">`;
                 const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30">` : '';
 
@@ -580,6 +584,8 @@
         .canvas-container { position: relative; width: 100%; background: white; z-index: 10; touch-action: none; }
         canvas { display: block; touch-action: none; }
         #feedback-layer { pointer-events: none; z-index: 20; }
+        /* 重要な修正: 課題背景の不透明度を100%に */
+        .task-bg { opacity: 1 !important; }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
@@ -607,7 +613,7 @@
                 <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[10px] text-gray-500 font-bold px-2 py-1 bg-gray-100 rounded">消去</button>
             </div>
             <div class="canvas-container flex-grow border-2 border-gray-300 rounded-xl shadow-inner relative overflow-hidden bg-white">
-                <div class="task-bg absolute inset-0 opacity-40 pointer-events-none"></div>
+                <div class="task-bg absolute inset-0 pointer-events-none"></div>
                 <canvas id="drawing-canvas" class="absolute inset-0 z-10"></canvas>
                 <canvas id="feedback-layer" class="absolute inset-0 z-20"></canvas>
             </div>
@@ -665,7 +671,7 @@
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-xl overflow-hidden">
             <!-- 1. 課題画像（最背面） -->
-            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat opacity-40 pointer-events-none"></div>
+            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
             <!-- 2. 児童の回答（中間） -->
             <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
             <!-- 3. 添削用描画レイヤー（前面） -->
