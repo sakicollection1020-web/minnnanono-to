@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>EdTech Canvas Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
@@ -37,7 +37,7 @@
             viewMode: 'mine', // 'mine' or 'others'
             userName: '',
             currentTask: "課題を待っています...",
-            isPublic: false, // 相互参照が許可されているか
+            isPublic: false,
             isDrawing: false,
             brushColor: '#000000',
             brushSize: 3,
@@ -62,6 +62,9 @@
             updateUI();
             setupEventListeners(canvas); 
             setupEventListeners(feedbackCanvas);
+
+            // リサイズ時にキャンバスサイズを再調整
+            window.addEventListener('resize', setupMainCanvas);
 
             if (!auth) return;
 
@@ -90,7 +93,6 @@
                     state.bgImage = data.bgImage || null;
                     state.isPublic = data.isPublic || false;
                     
-                    // 児童で、公開がOFFになったら強制的に「自分の画面」に戻す
                     if (state.role === 'student' && !state.isPublic) {
                         state.viewMode = 'mine';
                     }
@@ -153,15 +155,26 @@
 
         function setupMainCanvas() {
             const container = canvas.parentElement;
-            canvas.width = container.clientWidth || 800;
-            canvas.height = 500;
-            const ctx = canvas.getContext('2d');
-            ctx.lineJoin = 'round';
-            ctx.lineCap = 'round';
+            // コンテナの実際の表示サイズを取得
+            const rect = container.getBoundingClientRect();
+            
+            // キャンバスの状態を保存
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            tempCanvas.getContext('2d').drawImage(canvas, 0, 0);
+
+            canvas.width = rect.width;
+            canvas.height = rect.height;
 
             const feedbackLayer = document.getElementById('feedback-layer');
-            feedbackLayer.width = canvas.width;
-            feedbackLayer.height = canvas.height;
+            feedbackLayer.width = rect.width;
+            feedbackLayer.height = rect.height;
+
+            // 描画内容を復元（リサイズしても消えないように）
+            canvas.getContext('2d').drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+            
+            applyBg();
         }
 
         function setupEventListeners(targetCanvas) {
@@ -169,11 +182,9 @@
                 const rect = targetCanvas.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                const scaleX = targetCanvas.width / rect.width;
-                const scaleY = targetCanvas.height / rect.height;
                 return { 
-                    x: (clientX - rect.left) * scaleX, 
-                    y: (clientY - rect.top) * scaleY 
+                    x: (clientX - rect.left), 
+                    y: (clientY - rect.top)
                 };
             };
             
@@ -208,14 +219,14 @@
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
             window.addEventListener('mouseup', stop);
+            
             targetCanvas.addEventListener('touchstart', (e) => { 
                 if (state.role === 'student' && state.viewMode === 'others') return;
-                e.preventDefault(); 
                 start(e); 
             }, {passive: false});
             targetCanvas.addEventListener('touchmove', (e) => { 
                 if (state.role === 'student' && state.viewMode === 'others') return;
-                e.preventDefault(); 
+                e.preventDefault(); // スクロール防止
                 move(e); 
             }, {passive: false});
             targetCanvas.addEventListener('touchend', stop);
@@ -227,8 +238,9 @@
             modal.classList.remove('hidden');
 
             const container = feedbackCanvas.parentElement;
-            feedbackCanvas.width = container.clientWidth;
-            feedbackCanvas.height = container.clientHeight;
+            const rect = container.getBoundingClientRect();
+            feedbackCanvas.width = rect.width;
+            feedbackCanvas.height = rect.height;
             const fctx = feedbackCanvas.getContext('2d');
             fctx.lineJoin = 'round';
             fctx.lineCap = 'round';
@@ -266,11 +278,11 @@
 
         window.switchView = (mode) => {
             if (mode === 'others' && !state.isPublic && state.role === 'student') {
-                alert("先生が公開を終了しました");
                 return;
             }
             state.viewMode = mode;
             updateUI();
+            if (mode === 'mine') setupMainCanvas();
         };
 
         window.togglePublic = async () => {
@@ -355,7 +367,6 @@
                 submissionsView.classList.remove('hidden');
                 viewSwitch.classList.add('hidden');
                 
-                // 先生用公開設定ボタンの見た目
                 if (state.isPublic) {
                     publicToggleBtn.textContent = "みんなの画面：公開中";
                     publicToggleBtn.className = "bg-green-600 text-white px-3 py-1 rounded text-xs font-bold shadow-md animate-pulse";
@@ -365,13 +376,11 @@
                 }
             } else {
                 teacherView.classList.add('hidden');
-                
-                // 先生が公開を許可している場合のみスイッチを出す
                 if (state.isPublic) {
                     viewSwitch.classList.remove('hidden');
                 } else {
                     viewSwitch.classList.add('hidden');
-                    state.viewMode = 'mine'; // 強制
+                    state.viewMode = 'mine';
                 }
                 
                 if (state.viewMode === 'mine') {
@@ -397,45 +406,63 @@
         window.setPenColor = (c) => state.brushColor = c;
     </script>
     <style>
-        .canvas-container { position: relative; width: 100%; background: white; }
-        canvas { display: block; touch-action: none; }
+        * { -webkit-tap-highlight-color: transparent; }
+        body { 
+            touch-action: none; 
+            -webkit-user-select: none; 
+            user-select: none; 
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        .canvas-container { 
+            position: relative; 
+            width: 100%; 
+            height: 100%;
+            background: white; 
+            z-index: 10;
+        }
+        canvas { 
+            display: block; 
+            touch-action: none;
+            width: 100%;
+            height: 100%;
+        }
         #feedback-layer { pointer-events: none; z-index: 20; }
-        .cursor-pointer { cursor: pointer; -webkit-tap-highlight-color: transparent; }
-        body { touch-action: none; -webkit-user-select: none; user-select: none; overflow-x: hidden; }
         #submissions-grid { -webkit-overflow-scrolling: touch; }
     </style>
 </head>
-<body class="bg-gray-100 fixed inset-0 flex flex-col font-sans text-gray-900">
-    <nav class="bg-blue-900 text-white p-3 flex justify-between items-center shadow-lg flex-shrink-0 z-50">
+<body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
+    <nav class="bg-blue-900 text-white p-3 pb-4 flex justify-between items-center shadow-lg flex-shrink-0 z-50">
         <h1 class="font-bold text-sm">EdTech Canvas <span id="role-label" class="text-[10px] bg-blue-600 px-2 py-0.5 rounded-full ml-2"></span></h1>
         <div id="name-label" class="text-xs font-medium"></div>
     </nav>
 
-    <div class="p-2 flex-grow flex flex-col overflow-hidden">
+    <div class="p-2 flex-grow flex flex-col overflow-hidden relative">
         <!-- 課題タイトル表示 -->
-        <div class="bg-white p-2 rounded shadow mb-2 border-l-4 border-blue-500 flex justify-between items-center flex-shrink-0 overflow-hidden">
-            <h2 id="task-display" class="text-sm font-bold truncate italic text-gray-700 max-w-[60%]"></h2>
-            <!-- 先生画面のみ表示される公開設定スイッチ -->
+        <div class="bg-white p-2 rounded shadow mb-2 border-l-4 border-blue-500 flex justify-between items-center flex-shrink-0">
+            <h2 id="task-display" class="text-xs font-bold truncate italic text-gray-700 max-w-[50%]"></h2>
             <button id="public-toggle-btn" onclick="togglePublic()" class="hidden"></button>
         </div>
 
         <!-- 児童用：表示切り替えスイッチ -->
-        <div id="view-switch" class="hidden flex gap-2 mb-3 px-1">
-            <button id="btn-mine" onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold transition-all">自分の画面</button>
-            <button id="btn-others" onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold transition-all">みんなの画面</button>
+        <div id="view-switch" class="hidden flex gap-2 mb-2 px-1 flex-shrink-0">
+            <button id="btn-mine" onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold transition-all text-sm">自分の画面</button>
+            <button id="btn-others" onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold transition-all text-sm">みんなの画面</button>
         </div>
         
         <!-- 自分のキャンバス (児童) -->
         <div id="student-view" class="flex-grow flex flex-col gap-2 overflow-hidden">
-            <div class="bg-white p-2 rounded shadow flex gap-4 items-center overflow-x-auto flex-shrink-0">
-                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow flex-shrink-0"></button>
-                <button onclick="setPenColor('#ff4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow flex-shrink-0"></button>
-                <button onclick="setPenColor('#4444ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow flex-shrink-0"></button>
-                <button onclick="setPenColor('#22cc55')" class="w-8 h-8 rounded-full bg-green-500 border-2 border-white shadow flex-shrink-0"></button>
-                <button onclick="clearMyCanvas()" class="ml-auto text-xs text-gray-500 underline font-bold px-2">消去</button>
+            <div class="bg-white p-2 rounded shadow flex gap-4 items-center overflow-x-auto flex-shrink-0 z-30">
+                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow-sm flex-shrink-0"></button>
+                <button onclick="setPenColor('#ff4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow-sm flex-shrink-0"></button>
+                <button onclick="setPenColor('#4444ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-sm flex-shrink-0"></button>
+                <button onclick="setPenColor('#22cc55')" class="w-8 h-8 rounded-full bg-green-500 border-2 border-white shadow-sm flex-shrink-0"></button>
+                <button onclick="clearMyCanvas()" class="ml-auto text-[10px] text-gray-500 font-bold px-2 py-1 bg-gray-100 rounded">消去</button>
             </div>
-            <div class="canvas-container flex-grow border-2 border-gray-300 rounded-lg shadow-inner relative overflow-hidden">
-                <div class="task-bg absolute inset-0 opacity-30 pointer-events-none"></div>
+            <div class="canvas-container flex-grow border-2 border-gray-300 rounded-xl shadow-inner relative overflow-hidden bg-white">
+                <div class="task-bg absolute inset-0 opacity-40 pointer-events-none"></div>
                 <canvas id="drawing-canvas" class="absolute inset-0 z-10"></canvas>
                 <canvas id="feedback-layer" class="absolute inset-0 z-20"></canvas>
             </div>
@@ -444,29 +471,27 @@
         <!-- 先生用：操作パネル -->
         <div id="teacher-view" class="hidden bg-blue-50 p-2 rounded border border-blue-200 flex flex-wrap gap-2 items-center mb-2 flex-shrink-0">
             <input type="file" id="image-upload" accept="image/*" class="text-[10px] w-32">
-            <button onclick="distributeAssignment()" class="bg-blue-700 text-white px-3 py-1 rounded text-xs font-bold shadow hover:bg-blue-800 transition-colors">課題配信</button>
-            <div class="text-[10px] text-gray-500 italic ml-2">※左のスイッチで児童の「みんなの画面」を制御できます</div>
+            <button onclick="distributeAssignment()" class="bg-blue-700 text-white px-3 py-1 rounded text-[10px] font-bold shadow">課題配信</button>
         </div>
 
         <!-- みんなの作品一覧 (共通) -->
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
-            <div id="submissions-grid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-y-auto pb-20 p-1"></div>
+            <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-y-auto pb-10 p-1"></div>
         </div>
     </div>
 
     <!-- プレビュー・添削用モーダル -->
-    <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-4">
-        <div class="flex justify-between items-center text-white mb-2">
+    <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2 sm:p-4">
+        <div class="flex justify-between items-center text-white mb-2 px-2">
             <h3 id="feedback-modal-title" class="font-bold text-sm">プレビュー</h3>
-            <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-sm font-bold shadow-lg active:bg-blue-700 transition-colors">戻る</button>
+            <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-xs font-bold shadow-lg active:bg-blue-700 transition-colors">戻る</button>
         </div>
         
-        <!-- 先生のみ表示されるツール -->
         <div id="teacher-tools" class="hidden bg-white p-3 rounded-t-xl flex gap-6 items-center flex-shrink-0">
             <button onclick="setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-2 border-white shadow"></button>
             <button onclick="setPenColor('#ff00ff')" class="w-10 h-10 rounded-full bg-pink-500 border-2 border-white shadow"></button>
             <button onclick="setPenColor('#000000')" class="w-10 h-10 rounded-full bg-black border-2 border-white shadow"></button>
-            <button onclick="clearMyCanvas()" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md border border-gray-300 font-bold">添削消去</button>
+            <button onclick="clearMyCanvas()" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md border border-gray-300 font-bold">消去</button>
         </div>
 
         <div class="canvas-container flex-grow relative bg-white rounded-b-xl overflow-hidden shadow-2xl">
