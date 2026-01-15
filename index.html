@@ -103,15 +103,12 @@
                         try {
                             await signInWithCustomToken(auth, __initial_auth_token);
                         } catch (tokenError) {
-                            console.warn("Custom token failed, falling back to anonymous auth", tokenError);
                             await signInAnonymously(auth);
                         }
                     } else {
                         await signInAnonymously(auth);
                     }
-                } catch (error) {
-                    console.error("Auth Error:", error.code, error.message);
-                }
+                } catch (error) {}
             };
 
             onAuthStateChanged(auth, (user) => {
@@ -146,7 +143,7 @@
                     window.applyBg();
                     window.updateUI();
                 }
-            }, (err) => console.error("Settings Snap Error:", err));
+            });
 
             if (window.state.role === 'student') {
                 onSnapshot(getRoomDoc('submissions', window.state.user.uid), (snap) => {
@@ -156,15 +153,13 @@
                         if (data.feedbackData) renderFeedback(data.feedbackData);
                         else if (feedbackLayer) feedbackLayer.getContext('2d').clearRect(0, 0, feedbackLayer.width, feedbackLayer.height);
                         
-                        // Teacher requested reset of student canvas
                         if (data.canvasData === null) {
                             const tctx = window.canvas.getContext('2d');
                             tctx.clearRect(0, 0, window.canvas.width, window.canvas.height);
-                            // Set back to empty string to avoid loop
                             setDoc(getRoomDoc('submissions', window.state.user.uid), { canvasData: "" }, { merge: true });
                         }
                     }
-                }, (err) => console.error("My Submission Snap Error:", err));
+                });
             }
 
             onSnapshot(getRoomCollection('submissions'), (snap) => {
@@ -174,7 +169,7 @@
                     if (d.canvasData && d.canvasData !== "") list.push(d);
                 });
                 renderSubmissionsGrid(list);
-            }, (err) => console.error("Submissions Collection Error:", err));
+            });
         }
 
         function renderFeedback(dataUrl) {
@@ -488,18 +483,37 @@
 
         window.openPreviewModal = async (uid, name) => {
             window.state.editingStudentId = uid;
+            window.state.brushColor = '#ff0000'; // Default to red for correction
             const modal = document.getElementById('feedback-modal');
             modal.classList.remove('hidden');
+            
+            // Adjust size
             const container = window.feedbackCanvas.parentElement;
             const rect = container.getBoundingClientRect();
             window.feedbackCanvas.width = rect.width;
             window.feedbackCanvas.height = rect.height;
+
             const snap = await getDoc(getRoomDoc('submissions', uid));
             if (snap.exists()) {
                 const data = snap.data();
+                
+                // Set teacher's original task background
                 const feedbackTaskBg = document.getElementById('feedback-task-bg');
-                if (window.state.bgImage) feedbackTaskBg.style.backgroundImage = `url(${window.state.bgImage})`;
-                document.getElementById('feedback-bg').style.backgroundImage = `url(${data.canvasData})`;
+                if (window.state.bgImage) {
+                    feedbackTaskBg.style.backgroundImage = `url(${window.state.bgImage})`;
+                } else {
+                    feedbackTaskBg.style.backgroundImage = 'none';
+                }
+
+                // Set student's drawing background
+                const feedbackBg = document.getElementById('feedback-bg');
+                if (data.canvasData) {
+                    feedbackBg.style.backgroundImage = `url(${data.canvasData})`;
+                } else {
+                    feedbackBg.style.backgroundImage = 'none';
+                }
+
+                // Draw existing feedback
                 const fctx = window.feedbackCanvas.getContext('2d');
                 fctx.clearRect(0, 0, window.feedbackCanvas.width, window.feedbackCanvas.height);
                 if (data.feedbackData) {
@@ -542,12 +556,11 @@
             }
         };
 
-        // Resets a specific student's canvas
         window.resetStudentCanvas = async () => {
             if (!window.state.editingStudentId) return;
             if (confirm("この児童の回答をすべて消去しますか？")) {
                 await setDoc(getRoomDoc('submissions', window.state.editingStudentId), {
-                    canvasData: null, // Magic value to trigger reset on student side
+                    canvasData: null, 
                     feedbackData: "",
                     lastUpdate: Date.now()
                 }, { merge: true });
@@ -556,7 +569,6 @@
             }
         };
 
-        // Resets all students' canvases in the room
         window.resetAllCanvases = async () => {
             if (confirm("クラス全員の回答をすべて消去しますか？\n(この操作は取り消せません)")) {
                 const batch = writeBatch(window.db);
@@ -645,7 +657,6 @@
         function checkUrlParams() {
             const p = new URLSearchParams(window.location.search);
             window.state.role = p.get('role') || 'student';
-            
             const roomParam = p.get('room');
             if (roomParam) {
                 window.state.roomName = normalizeId(roomParam);
@@ -653,7 +664,6 @@
             } else {
                 window.state.roomName = normalizeId(localStorage.getItem('school_note_room_name')) || '';
             }
-
             const nameParam = p.get('name');
             if (nameParam) {
                 window.state.userName = nameParam;
@@ -690,12 +700,16 @@
         #feedback-layer { pointer-events: none; z-index: 20; }
         .task-bg, #feedback-task-bg, #feedback-bg { background-color: white; }
         
-        /* Teacher scroll buttons container style */
         .teacher-scroll-menu {
             scrollbar-width: none;
             -ms-overflow-style: none;
         }
         .teacher-scroll-menu::-webkit-scrollbar { display: none; }
+
+        /* Correction Modal Layout Fix */
+        #feedback-task-bg { z-index: 100; }
+        #feedback-bg { z-index: 101; }
+        #feedback-canvas { z-index: 102; }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
@@ -735,7 +749,6 @@
             </div>
         </div>
 
-        <!-- Teacher Controls -->
         <div id="teacher-view" class="hidden bg-white p-2 rounded-xl border-2 border-blue-400 flex flex-col gap-2 mb-2 flex-shrink-0 shadow-md">
             <div class="flex gap-2 overflow-x-auto teacher-scroll-menu py-1">
                 <button onclick="window.openTaskCreateModal()" class="flex-shrink-0 bg-blue-700 text-white px-4 py-2 rounded-full text-[10px] font-bold shadow-md active:scale-95">＋ 課題作成</button>
@@ -794,21 +807,11 @@
             </div>
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-2xl overflow-hidden shadow-2xl">
-            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
-            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
-            <canvas id="feedback-canvas" class="absolute inset-0 z-[110]"></canvas>
+            <!-- Order of layers is critical: Task(Teacher's write) -> Student -> Teacher Feedback Canvas -->
+            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none opacity-100"></div>
+            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none mix-blend-multiply opacity-90"></div>
+            <canvas id="feedback-canvas" class="absolute inset-0"></canvas>
         </div>
     </div>
-    
-    <script>
-        setInterval(() => {
-            if (window.state) {
-                const display = document.getElementById('teacher-room-display');
-                if (display && display.textContent !== window.state.roomName) {
-                    display.textContent = window.state.roomName || "未設定";
-                }
-            }
-        }, 1000);
-    </script>
 </body>
 </html>
