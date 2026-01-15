@@ -59,6 +59,7 @@
             window.canvas = document.getElementById('drawing-canvas');
             window.feedbackCanvas = document.getElementById('feedback-canvas');
             window.taskCreateCanvas = document.getElementById('task-create-canvas');
+            window.eraserCursor = document.getElementById('eraser-cursor');
         };
 
         function normalizeId(str) {
@@ -233,6 +234,28 @@
         };
 
         function setupEventListeners(targetCanvas) {
+            const updateCursor = (e) => {
+                if (!window.state.isEraser) {
+                    window.eraserCursor.style.display = 'none';
+                    return;
+                }
+                const rect = targetCanvas.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                
+                // キャンバス外に出たかチェック
+                if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+                    window.eraserCursor.style.display = 'none';
+                    return;
+                }
+
+                window.eraserCursor.style.display = 'block';
+                window.eraserCursor.style.width = window.state.eraserSize + 'px';
+                window.eraserCursor.style.height = window.state.eraserSize + 'px';
+                window.eraserCursor.style.left = (clientX - window.state.eraserSize / 2) + 'px';
+                window.eraserCursor.style.top = (clientY - window.state.eraserSize / 2) + 'px';
+            };
+
             const getPos = (e) => {
                 const rect = targetCanvas.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -249,8 +272,10 @@
                 const pos = getPos(e);
                 tctx.beginPath();
                 tctx.moveTo(pos.x, pos.y);
+                updateCursor(e);
             };
             const move = (e) => {
+                updateCursor(e);
                 if (!window.state.isDrawing) return;
                 const tctx = targetCanvas.getContext('2d');
                 const pos = getPos(e);
@@ -274,9 +299,13 @@
                     window.state.isDrawing = false;
                     window.syncCanvas();
                 }
+                window.eraserCursor.style.display = 'none';
             };
+
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
+            targetCanvas.addEventListener('mouseenter', (e) => { if(window.state.isEraser) window.eraserCursor.style.display = 'block'; });
+            targetCanvas.addEventListener('mouseleave', () => { window.eraserCursor.style.display = 'none'; });
             window.addEventListener('mouseup', stop);
             targetCanvas.addEventListener('touchstart', (e) => { if (window.state.role === 'student' && window.state.viewMode === 'others') return; start(e); }, {passive: false});
             targetCanvas.addEventListener('touchmove', (e) => { if (window.state.role === 'student' && window.state.viewMode === 'others') return; e.preventDefault(); move(e); }, {passive: false});
@@ -309,6 +338,26 @@
 
         function setupTaskCreateListeners(targetCanvas) {
             let lastX, lastY;
+
+            const updateCursor = (e) => {
+                if (!window.state.isEraser) {
+                    window.eraserCursor.style.display = 'none';
+                    return;
+                }
+                const rect = targetCanvas.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+                    window.eraserCursor.style.display = 'none';
+                    return;
+                }
+                window.eraserCursor.style.display = 'block';
+                window.eraserCursor.style.width = window.state.eraserSize + 'px';
+                window.eraserCursor.style.height = window.state.eraserSize + 'px';
+                window.eraserCursor.style.left = (clientX - window.state.eraserSize / 2) + 'px';
+                window.eraserCursor.style.top = (clientY - window.state.eraserSize / 2) + 'px';
+            };
+
             const getPos = (e) => {
                 const rect = targetCanvas.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -340,9 +389,11 @@
                     ctx.beginPath();
                     ctx.moveTo(pos.x, pos.y);
                 }
+                updateCursor(e);
                 window.drawTaskCreateCanvas();
             };
             const move = (e) => {
+                updateCursor(e);
                 const pos = getPos(e);
                 const dx = pos.x - lastX;
                 const dy = pos.y - lastY;
@@ -375,9 +426,12 @@
                 window.state.isDrawing = false;
                 window.state.isResizing = false;
                 window.state.isDraggingImage = false;
+                window.eraserCursor.style.display = 'none';
             };
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
+            targetCanvas.addEventListener('mouseenter', (e) => { if(window.state.isEraser) window.eraserCursor.style.display = 'block'; });
+            targetCanvas.addEventListener('mouseleave', () => { window.eraserCursor.style.display = 'none'; });
             window.addEventListener('mouseup', stop);
             targetCanvas.addEventListener('touchstart', start, {passive: false});
             targetCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); }, {passive: false});
@@ -574,6 +628,25 @@
             window.state.roomName = normalizeId(p.get('room') || localStorage.getItem('school_note_room_name')) || '';
             window.state.userName = p.get('name') || localStorage.getItem('school_note_user_name') || '';
         }
+
+        window.handleTaskImageUpload = (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    window.state.floatingImages.push({
+                        img: img, x: 50, y: 50,
+                        w: img.width > 300 ? 300 : img.width,
+                        h: img.width > 300 ? (img.height * (300 / img.width)) : img.height
+                    });
+                    window.drawTaskCreateCanvas();
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        };
     </script>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
@@ -583,9 +656,23 @@
         #feedback-layer { pointer-events: none; z-index: 20; }
         .brush-slider { -webkit-appearance: none; height: 6px; background: #e2e8f0; border-radius: 5px; outline: none; }
         .brush-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #2563eb; border-radius: 50%; cursor: pointer; border: 2px solid white; }
+        
+        /* 消しゴムプレビュー用 */
+        #eraser-cursor {
+            position: fixed;
+            pointer-events: none;
+            border: 1.5px solid #2563eb;
+            background: rgba(37, 99, 235, 0.1);
+            border-radius: 50%;
+            z-index: 9999;
+            display: none;
+        }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col font-sans overflow-hidden">
+    <!-- 消しゴム範囲インジケーター -->
+    <div id="eraser-cursor"></div>
+
     <nav class="bg-blue-900 text-white p-3 flex justify-between items-center shadow-lg flex-shrink-0 z-50">
         <div class="flex flex-col">
             <h1 class="font-bold text-sm">EdTech Canvas Pro <span id="role-label" class="text-[10px] bg-blue-600 px-2 py-0.5 rounded-full ml-1"></span></h1>
@@ -616,10 +703,9 @@
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.9-9.9c1-1 2.5-1 3.4 0l4.4 4.4c1 1 1 2.5 0 3.4L10.5 21z"/><path d="m15 5 4 4"/></svg>
                     </button>
                 </div>
-                <!-- 太さ調整エリア -->
                 <div class="flex items-center gap-3 bg-gray-50 px-3 py-1 rounded-full border">
                     <span class="text-[9px] font-bold text-gray-500">太さ</span>
-                    <input type="range" min="1" max="50" step="1" class="brush-slider w-20 md:w-32" oninput="window.updateBrushSize(this.value)">
+                    <input type="range" min="2" max="100" step="1" class="brush-slider w-20 md:w-32" oninput="window.updateBrushSize(this.value)">
                     <div class="brush-size-preview rounded-full transition-all"></div>
                 </div>
                 <button onclick="window.clearCanvas('drawing-canvas')" class="ml-auto text-[11px] text-red-500 font-bold px-3 py-1 bg-red-50 rounded-full border border-red-100">全部消す</button>
@@ -661,7 +747,7 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.9-9.9c1-1 2.5-1 3.4 0l4.4 4.4c1 1 1 2.5 0 3.4L10.5 21z"/><path d="m15 5 4 4"/></svg>
                 </button>
                 <div class="flex items-center gap-2 bg-gray-50 px-3 py-1 rounded-full border">
-                    <input type="range" min="1" max="50" step="1" class="brush-slider w-20" oninput="window.updateBrushSize(this.value)">
+                    <input type="range" min="2" max="100" step="1" class="brush-slider w-20" oninput="window.updateBrushSize(this.value)">
                     <div class="brush-size-preview rounded-full"></div>
                 </div>
                 <button onclick="window.clearCanvas('task-create-canvas')" class="ml-auto text-[10px] text-red-500">リセット</button>
@@ -683,7 +769,7 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-gray-800"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.9-9.9c1-1 2.5-1 3.4 0l4.4 4.4c1 1 1 2.5 0 3.4L10.5 21z"/><path d="m15 5 4 4"/></svg>
             </button>
             <div class="flex items-center gap-2 bg-gray-800 px-3 py-1 rounded-full border border-gray-600">
-                <input type="range" min="1" max="50" step="1" class="brush-slider w-20" oninput="window.updateBrushSize(this.value)">
+                <input type="range" min="2" max="100" step="1" class="brush-slider w-20" oninput="window.updateBrushSize(this.value)">
                 <div class="brush-size-preview rounded-full"></div>
             </div>
             <button onclick="window.closeFeedbackModal()" class="bg-blue-600 px-4 py-2 rounded-full text-[10px] font-bold">戻る</button>
