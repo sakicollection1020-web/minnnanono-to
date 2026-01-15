@@ -39,11 +39,13 @@
             brushColor: '#000000',
             brushSize: 3,
             bgImage: null,
-            editingStudentId: null 
+            editingStudentId: null,
+            isTaskCreating: false // 先生が課題作成中か
         };
 
         const canvas = document.getElementById('drawing-canvas');
         const feedbackCanvas = document.getElementById('feedback-canvas');
+        const taskCreateCanvas = document.getElementById('task-create-canvas');
 
         window.onload = async () => {
             checkUrlParams();
@@ -55,13 +57,13 @@
                 localStorage.setItem('school_note_user_name', state.userName);
             }
 
-            // 初回描画とリサイズ対応
             setTimeout(setupMainCanvas, 100);
             window.addEventListener('resize', setupMainCanvas);
             
             updateUI();
             setupEventListeners(canvas); 
             setupEventListeners(feedbackCanvas);
+            setupEventListeners(taskCreateCanvas);
 
             if (!auth) return;
             try {
@@ -145,7 +147,6 @@
             const container = canvas.parentElement;
             if (!container) return;
 
-            // 画面全体の高さから、他の要素の高さを引いて、キャンバスの高さを計算
             const navH = document.querySelector('nav').offsetHeight;
             const taskH = document.getElementById('task-container').offsetHeight;
             const switchH = state.role === 'student' && state.isPublic ? document.getElementById('view-switch').offsetHeight : 0;
@@ -153,13 +154,10 @@
             const teacherToolH = state.role === 'teacher' ? document.getElementById('teacher-view').offsetHeight : 0;
             
             const windowH = window.innerHeight;
-            // 余裕を持って計算
             const availableH = windowH - navH - taskH - switchH - toolH - teacherToolH - 40;
 
-            // キャンバスサイズを物理ピクセルで設定
             const rect = container.getBoundingClientRect();
             
-            // 内容保存用
             const temp = document.createElement('canvas');
             temp.width = canvas.width;
             temp.height = canvas.height;
@@ -172,7 +170,6 @@
             feedbackLayer.width = canvas.width;
             feedbackLayer.height = canvas.height;
 
-            // 内容復元
             canvas.getContext('2d').drawImage(temp, 0, 0, canvas.width, canvas.height);
             applyBg();
         }
@@ -182,7 +179,6 @@
                 const rect = targetCanvas.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                // 座標をキャンバスの解像度に合わせる
                 return { 
                     x: (clientX - rect.left) * (targetCanvas.width / rect.width), 
                     y: (clientY - rect.top) * (targetCanvas.height / rect.height)
@@ -213,7 +209,7 @@
             const stop = () => {
                 if (state.isDrawing) {
                     state.isDrawing = false;
-                    syncCanvas();
+                    if (!state.isTaskCreating) syncCanvas();
                 }
             };
 
@@ -233,6 +229,85 @@
             targetCanvas.addEventListener('touchend', stop);
         }
 
+        // 課題作成モーダルを開く
+        window.openTaskCreateModal = () => {
+            state.isTaskCreating = true;
+            const modal = document.getElementById('task-create-modal');
+            modal.classList.remove('hidden');
+
+            const container = taskCreateCanvas.parentElement;
+            const rect = container.getBoundingClientRect();
+            taskCreateCanvas.width = rect.width;
+            taskCreateCanvas.height = rect.height;
+            
+            const ctx = taskCreateCanvas.getContext('2d');
+            ctx.clearRect(0, 0, taskCreateCanvas.width, taskCreateCanvas.height);
+            document.getElementById('task-create-bg').style.backgroundImage = '';
+            document.getElementById('task-title-input').value = "";
+        };
+
+        window.closeTaskCreateModal = () => {
+            state.isTaskCreating = false;
+            document.getElementById('task-create-modal').classList.add('hidden');
+        };
+
+        // 課題作成用の背景画像選択
+        window.handleTaskImageUpload = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                document.getElementById('task-create-bg').style.backgroundImage = `url(${event.target.result})`;
+            };
+            reader.readAsDataURL(file);
+        };
+
+        // 課題を配信する
+        window.finalizeAndDistribute = async () => {
+            const title = document.getElementById('task-title-input').value || "新しい課題";
+            
+            // 背景画像と手書きを合成した新しい画像を作成
+            const offscreen = document.createElement('canvas');
+            offscreen.width = taskCreateCanvas.width;
+            offscreen.height = taskCreateCanvas.height;
+            const octx = offscreen.getContext('2d');
+
+            // 1. 白背景
+            octx.fillStyle = "white";
+            octx.fillRect(0, 0, offscreen.width, offscreen.height);
+
+            // 2. 背景画像があれば描画
+            const bgStyle = document.getElementById('task-create-bg').style.backgroundImage;
+            if (bgStyle) {
+                const url = bgStyle.slice(5, -2);
+                const img = await new Promise(resolve => {
+                    const i = new Image();
+                    i.onload = () => resolve(i);
+                    i.src = url;
+                });
+                // アスペクト比を維持して描画
+                const ratio = Math.min(offscreen.width / img.width, offscreen.height / img.height);
+                const x = (offscreen.width - img.width * ratio) / 2;
+                const y = (offscreen.height - img.height * ratio) / 2;
+                octx.drawImage(img, x, y, img.width * ratio, img.height * ratio);
+            }
+
+            // 3. 先生の手書きを重ねる
+            octx.drawImage(taskCreateCanvas, 0, 0);
+
+            const finalDataUrl = offscreen.toDataURL('image/webp', 0.5);
+            
+            if (confirm("この内容で全児童に配信しますか？")) {
+                await setDoc(doc(db, 'class-settings', 'current'), { 
+                    taskTitle: title, 
+                    bgImage: finalDataUrl,
+                    lastDistribute: Date.now()
+                });
+                alert("配信しました！");
+                closeTaskCreateModal();
+            }
+        };
+
         window.openPreviewModal = async (uid, name) => {
             state.editingStudentId = uid;
             const modal = document.getElementById('feedback-modal');
@@ -242,10 +317,7 @@
             const rect = container.getBoundingClientRect();
             feedbackCanvas.width = rect.width;
             feedbackCanvas.height = rect.height;
-            const fctx = feedbackCanvas.getContext('2d');
-            fctx.lineJoin = 'round';
-            fctx.lineCap = 'round';
-
+            
             const titleEl = document.getElementById('feedback-modal-title');
             const toolsEl = document.getElementById('teacher-tools');
             
@@ -260,9 +332,8 @@
             const snap = await getDoc(doc(db, 'student-canvas', uid));
             if (snap.exists()) {
                 const data = snap.data();
-                const bg = document.getElementById('feedback-bg');
-                bg.style.backgroundImage = `url(${data.canvasData})`;
-                
+                document.getElementById('feedback-bg').style.backgroundImage = `url(${data.canvasData})`;
+                const fctx = feedbackCanvas.getContext('2d');
                 fctx.clearRect(0, 0, feedbackCanvas.width, feedbackCanvas.height);
                 if (data.feedbackData) {
                     const img = new Image();
@@ -289,28 +360,12 @@
             await setDoc(doc(db, 'class-settings', 'current'), { isPublic: newVal }, { merge: true });
         };
 
-        window.clearMyCanvas = () => {
-            const target = (state.role === 'teacher' || (state.role === 'student' && state.editingStudentId)) ? feedbackCanvas : canvas;
+        window.clearCanvas = (id) => {
+            const target = document.getElementById(id);
             const tctx = target.getContext('2d');
             if (confirm("すべて消去しますか？")) {
                 tctx.clearRect(0, 0, target.width, target.height);
-                syncCanvas();
-            }
-        };
-
-        window.distributeAssignment = async () => {
-            const title = prompt("課題のタイトル", state.currentTask);
-            if (!title) return;
-            const fileInput = document.getElementById('image-upload');
-            if (fileInput.files[0]) {
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    await setDoc(doc(db, 'class-settings', 'current'), { taskTitle: title, bgImage: e.target.result });
-                    alert("配信完了");
-                };
-                reader.readAsDataURL(fileInput.files[0]);
-            } else {
-                await setDoc(doc(db, 'class-settings', 'current'), { taskTitle: title }, { merge: true });
+                if (id !== 'task-create-canvas') syncCanvas();
             }
         };
 
@@ -457,7 +512,7 @@
                 <button onclick="setPenColor('#ff4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow-sm flex-shrink-0"></button>
                 <button onclick="setPenColor('#4444ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-sm flex-shrink-0"></button>
                 <button onclick="setPenColor('#22cc55')" class="w-8 h-8 rounded-full bg-green-500 border-2 border-white shadow-sm flex-shrink-0"></button>
-                <button onclick="clearMyCanvas()" class="ml-auto text-[10px] text-gray-500 font-bold px-2 py-1 bg-gray-100 rounded">消去</button>
+                <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[10px] text-gray-500 font-bold px-2 py-1 bg-gray-100 rounded">消去</button>
             </div>
             <div class="canvas-container flex-grow border-2 border-gray-300 rounded-xl shadow-inner relative overflow-hidden bg-white">
                 <div class="task-bg absolute inset-0 opacity-40 pointer-events-none"></div>
@@ -468,8 +523,8 @@
 
         <!-- 先生用：操作パネル -->
         <div id="teacher-view" class="hidden bg-blue-50 p-2 rounded border border-blue-200 flex flex-wrap gap-2 items-center mb-2 flex-shrink-0">
-            <input type="file" id="image-upload" accept="image/*" class="text-[10px] w-32">
-            <button onclick="distributeAssignment()" class="bg-blue-700 text-white px-3 py-1 rounded text-[10px] font-bold shadow">課題配信</button>
+            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-md hover:bg-blue-800 active:scale-95 transition-all">課題作成・配信</button>
+            <p class="text-[10px] text-blue-800 italic">←ここから画像や指示を書いて配付できます</p>
         </div>
 
         <!-- みんなの作品一覧 -->
@@ -478,7 +533,41 @@
         </div>
     </div>
 
-    <!-- モーダル -->
+    <!-- 課題作成モーダル -->
+    <div id="task-create-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
+        <div class="bg-white rounded-xl flex flex-col h-full overflow-hidden">
+            <div class="bg-blue-800 text-white p-3 flex justify-between items-center">
+                <h3 class="font-bold text-sm">新規課題の作成</h3>
+                <button onclick="closeTaskCreateModal()" class="text-xs bg-red-500 px-3 py-1 rounded">キャンセル</button>
+            </div>
+            
+            <div class="p-3 border-b flex flex-wrap gap-3 items-center">
+                <input type="text" id="task-title-input" placeholder="課題名を入力 (例: かんじの練習)" class="border p-2 rounded text-sm flex-grow">
+                <label class="bg-gray-100 px-3 py-2 rounded border cursor-pointer text-xs font-bold">
+                    画像を選択
+                    <input type="file" accept="image/*" class="hidden" onchange="handleTaskImageUpload(event)">
+                </label>
+            </div>
+
+            <div class="bg-gray-50 p-2 flex gap-4 items-center">
+                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white"></button>
+                <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-white"></button>
+                <button onclick="setPenColor('#0000ff')" class="w-8 h-8 rounded-full bg-blue-600 border-2 border-white"></button>
+                <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-white border px-2 py-1 rounded">全消去</button>
+            </div>
+
+            <div class="canvas-container flex-grow relative bg-white overflow-hidden border-b-2 border-blue-100">
+                <div id="task-create-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat opacity-60"></div>
+                <canvas id="task-create-canvas" class="absolute inset-0 z-10"></canvas>
+            </div>
+
+            <div class="p-4 bg-blue-50 text-center">
+                <button onclick="finalizeAndDistribute()" class="bg-blue-600 text-white px-10 py-3 rounded-full font-bold shadow-xl active:scale-95 transition-all">この内容で配信する</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添削モーダル -->
     <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="flex justify-between items-center text-white mb-2 px-2">
             <h3 id="feedback-modal-title" class="font-bold text-sm">プレビュー</h3>
@@ -488,7 +577,7 @@
             <button onclick="setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-2 border-white shadow"></button>
             <button onclick="setPenColor('#ff00ff')" class="w-10 h-10 rounded-full bg-pink-500 border-2 border-white shadow"></button>
             <button onclick="setPenColor('#000000')" class="w-10 h-10 rounded-full bg-black border-2 border-white shadow"></button>
-            <button onclick="clearMyCanvas()" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md border border-gray-300 font-bold">消去</button>
+            <button onclick="clearCanvas('feedback-canvas')" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md border border-gray-300 font-bold">消去</button>
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-b-xl overflow-hidden">
             <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
