@@ -116,7 +116,6 @@
                     window.state.user = user;
                     initSync();
                     window.updateUI();
-                    // Initial registration to show in list even if not drawn
                     syncCanvas();
                 }
             });
@@ -158,7 +157,6 @@
                         if (data.canvasData === null) {
                             const tctx = window.canvas.getContext('2d');
                             tctx.clearRect(0, 0, window.canvas.width, window.canvas.height);
-                            // Do not setDoc here to avoid loops, just clear UI
                         }
                     }
                 });
@@ -168,7 +166,6 @@
                 const list = [];
                 snap.forEach(doc => {
                     const d = doc.data();
-                    // Always add to list if document exists (indicating user joined room)
                     list.push(d);
                 });
                 renderSubmissionsGrid(list);
@@ -193,7 +190,6 @@
             if (!window.state.user || !window.db || !window.state.roomName) return;
             if (window.state.role === 'student') {
                 const dataUrl = window.canvas.toDataURL('image/webp', 0.5);
-                // Even if canvas is blank, we sync to show the user in the grid
                 await setDoc(getRoomDoc('submissions', window.state.user.uid), {
                     uid: window.state.user.uid,
                     name: window.state.userName,
@@ -487,11 +483,10 @@
 
         window.openPreviewModal = async (uid, name) => {
             window.state.editingStudentId = uid;
-            window.state.brushColor = '#ff0000'; // Default to red for correction
+            window.state.brushColor = '#ff0000';
             const modal = document.getElementById('feedback-modal');
             modal.classList.remove('hidden');
             
-            // Adjust size
             const container = window.feedbackCanvas.parentElement;
             const rect = container.getBoundingClientRect();
             window.feedbackCanvas.width = rect.width;
@@ -501,7 +496,6 @@
             if (snap.exists()) {
                 const data = snap.data();
                 
-                // Set teacher's original task background
                 const feedbackTaskBg = document.getElementById('feedback-task-bg');
                 if (window.state.bgImage) {
                     feedbackTaskBg.style.backgroundImage = `url(${window.state.bgImage})`;
@@ -509,7 +503,6 @@
                     feedbackTaskBg.style.backgroundImage = 'none';
                 }
 
-                // Set student's drawing background
                 const feedbackBg = document.getElementById('feedback-bg');
                 if (data.canvasData) {
                     feedbackBg.style.backgroundImage = `url(${data.canvasData})`;
@@ -517,7 +510,6 @@
                     feedbackBg.style.backgroundImage = 'none';
                 }
 
-                // Draw existing feedback
                 const fctx = window.feedbackCanvas.getContext('2d');
                 fctx.clearRect(0, 0, window.feedbackCanvas.width, window.feedbackCanvas.height);
                 if (data.feedbackData) {
@@ -607,7 +599,6 @@
             if (!grid) return;
             grid.innerHTML = '';
             
-            // Sort by name (A-Z) to fix position
             list.sort((a, b) => {
                 const nameA = a.name || "";
                 const nameB = b.name || "";
@@ -616,24 +607,26 @@
 
             list.forEach(data => {
                 const div = document.createElement('div');
-                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[180px] overflow-hidden transition-all active:scale-95";
+                // Height adjusted to auto, added slight shadow and border refinement
+                div.className = "bg-white p-1 border border-gray-200 rounded-md shadow-sm cursor-pointer hover:border-blue-400 relative h-auto overflow-hidden transition-all active:scale-95";
                 
                 const bgImgHtml = window.state.bgImage ? `<img src="${window.state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10">` : '';
                 
-                // Show drawing if it exists, otherwise show placeholder
                 let canvasImgHtml = '';
                 if (data.canvasData) {
                     canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20">`;
                 } else {
-                    canvasImgHtml = `<div class="absolute inset-0 z-20 flex items-center justify-center text-[10px] text-gray-300 italic">未入力</div>`;
+                    canvasImgHtml = `<div class="absolute inset-0 z-20 flex items-center justify-center text-[9px] text-gray-300 italic">未入力</div>`;
                 }
 
                 const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30">` : '';
                 
                 div.innerHTML = `
                     <div class="absolute inset-0 z-[60] bg-transparent"></div>
-                    <p class="text-[11px] font-bold truncate text-blue-800 mb-1 relative z-[70] bg-white bg-opacity-80 px-1">${data.name}</p>
-                    <div class="relative aspect-[4/3] border bg-white pointer-events-none overflow-hidden h-[130px]">
+                    <div class="relative z-[70] bg-white bg-opacity-90 px-1 py-0.5 mb-0.5 border-b border-gray-50">
+                         <p class="text-[10px] font-bold truncate text-blue-900">${data.name}</p>
+                    </div>
+                    <div class="relative aspect-[4/3] bg-white pointer-events-none overflow-hidden w-full">
                         ${bgImgHtml}
                         ${canvasImgHtml}
                         ${feedbackImgHtml}
@@ -727,7 +720,6 @@
         }
         .teacher-scroll-menu::-webkit-scrollbar { display: none; }
 
-        /* Correction Modal Layout Fix */
         #feedback-task-bg { z-index: 100; }
         #feedback-bg { z-index: 101; }
         #feedback-canvas { z-index: 102; }
@@ -781,7 +773,8 @@
         </div>
 
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
-            <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto pb-20 p-1"></div>
+            <!-- Grid gap narrowed for tighter look -->
+            <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 gap-2 overflow-y-auto pb-20 p-1"></div>
         </div>
     </div>
 
@@ -828,7 +821,6 @@
             </div>
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-2xl overflow-hidden shadow-2xl">
-            <!-- Order of layers is critical: Task(Teacher's write) -> Student -> Teacher Feedback Canvas -->
             <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none opacity-100"></div>
             <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none mix-blend-multiply opacity-90"></div>
             <canvas id="feedback-canvas" class="absolute inset-0"></canvas>
