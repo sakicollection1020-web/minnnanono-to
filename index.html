@@ -40,7 +40,11 @@
             brushSize: 3,
             bgImage: null,
             editingStudentId: null,
-            isTaskCreating: false // 先生が課題作成中か
+            isTaskCreating: false,
+            // 課題作成時スタンプ（画像）管理
+            floatingImages: [],
+            selectedImageIdx: -1,
+            isResizing: false
         };
 
         const canvas = document.getElementById('drawing-canvas');
@@ -63,7 +67,10 @@
             updateUI();
             setupEventListeners(canvas); 
             setupEventListeners(feedbackCanvas);
-            setupEventListeners(taskCreateCanvas);
+            setupTaskCreateListeners(taskCreateCanvas);
+
+            // 貼り付けイベント
+            document.addEventListener('paste', handlePaste);
 
             if (!auth) return;
             try {
@@ -79,6 +86,33 @@
                 console.error("Login Error:", error.code);
             }
         };
+
+        // クリップボード貼り付け処理
+        function handlePaste(e) {
+            if (!state.isTaskCreating) return;
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (let item of items) {
+                if (item.type.indexOf("image") !== -1) {
+                    const blob = item.getAsFile();
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            state.floatingImages.push({
+                                img: img,
+                                x: 50,
+                                y: 50,
+                                w: img.width > 300 ? 300 : img.width,
+                                h: img.width > 300 ? (img.height * (300 / img.width)) : img.height
+                            });
+                            drawTaskCreateCanvas();
+                        };
+                        img.src = event.target.result;
+                    };
+                    reader.readAsDataURL(blob);
+                }
+            }
+        }
 
         function initSync() {
             if (!db) return;
@@ -149,7 +183,7 @@
 
             const navH = document.querySelector('nav').offsetHeight;
             const taskH = document.getElementById('task-container').offsetHeight;
-            const switchH = state.role === 'student' && state.isPublic ? document.getElementById('view-switch').offsetHeight : 0;
+            const switchH = (state.role === 'student' && state.isPublic) ? document.getElementById('view-switch').offsetHeight : 0;
             const toolH = document.getElementById('student-tools')?.offsetHeight || 0;
             const teacherToolH = state.role === 'teacher' ? document.getElementById('teacher-view').offsetHeight : 0;
             
@@ -174,6 +208,7 @@
             applyBg();
         }
 
+        // 基本の描画リスナー（児童用・添削用）
         function setupEventListeners(targetCanvas) {
             const getPos = (e) => {
                 const rect = targetCanvas.getBoundingClientRect();
@@ -209,29 +244,145 @@
             const stop = () => {
                 if (state.isDrawing) {
                     state.isDrawing = false;
-                    if (!state.isTaskCreating) syncCanvas();
+                    syncCanvas();
                 }
             };
 
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
             window.addEventListener('mouseup', stop);
-            
-            targetCanvas.addEventListener('touchstart', (e) => { 
-                if (state.role === 'student' && state.viewMode === 'others') return;
-                start(e); 
-            }, {passive: false});
-            targetCanvas.addEventListener('touchmove', (e) => { 
-                if (state.role === 'student' && state.viewMode === 'others') return;
-                e.preventDefault(); 
-                move(e); 
-            }, {passive: false});
+            targetCanvas.addEventListener('touchstart', (e) => { if (state.role === 'student' && state.viewMode === 'others') return; start(e); }, {passive: false});
+            targetCanvas.addEventListener('touchmove', (e) => { if (state.role === 'student' && state.viewMode === 'others') return; e.preventDefault(); move(e); }, {passive: false});
             targetCanvas.addEventListener('touchend', stop);
         }
 
-        // 課題作成モーダルを開く
+        // 課題作成用：画像移動・リサイズ対応の高度なリスナー
+        function setupTaskCreateListeners(targetCanvas) {
+            let lastX, lastY;
+            const getPos = (e) => {
+                const rect = targetCanvas.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                return { 
+                    x: (clientX - rect.left) * (targetCanvas.width / rect.width), 
+                    y: (clientY - rect.top) * (targetCanvas.height / rect.height)
+                };
+            };
+
+            const start = (e) => {
+                const pos = getPos(e);
+                lastX = pos.x; lastY = pos.y;
+                state.selectedImageIdx = -1;
+                state.isResizing = false;
+
+                // 画像のハンドル判定（逆順で新しい順に判定）
+                for (let i = state.floatingImages.length - 1; i >= 0; i--) {
+                    const img = state.floatingImages[i];
+                    // リサイズハンドル (右下)
+                    if (pos.x > img.x + img.w - 20 && pos.x < img.x + img.w + 10 &&
+                        pos.y > img.y + img.h - 20 && pos.y < img.y + img.h + 10) {
+                        state.selectedImageIdx = i;
+                        state.isResizing = true;
+                        break;
+                    }
+                    // 画像本体
+                    if (pos.x > img.x && pos.x < img.x + img.w && pos.y > img.y && pos.y < img.y + img.h) {
+                        state.selectedImageIdx = i;
+                        break;
+                    }
+                }
+
+                if (state.selectedImageIdx === -1) {
+                    state.isDrawing = true;
+                    const ctx = targetCanvas.getContext('2d');
+                    ctx.beginPath();
+                    ctx.moveTo(pos.x, pos.y);
+                }
+                drawTaskCreateCanvas();
+            };
+
+            const move = (e) => {
+                const pos = getPos(e);
+                const dx = pos.x - lastX;
+                const dy = pos.y - lastY;
+
+                if (state.selectedImageIdx !== -1) {
+                    const img = state.floatingImages[state.selectedImageIdx];
+                    if (state.isResizing) {
+                        img.w += dx;
+                        img.h += dy;
+                    } else {
+                        img.x += dx;
+                        img.y += dy;
+                    }
+                    drawTaskCreateCanvas();
+                } else if (state.isDrawing) {
+                    const ctx = targetCanvas.getContext('2d');
+                    ctx.strokeStyle = state.brushColor;
+                    ctx.lineWidth = state.brushSize;
+                    ctx.lineJoin = 'round';
+                    ctx.lineCap = 'round';
+                    ctx.lineTo(pos.x, pos.y);
+                    ctx.stroke();
+                }
+                lastX = pos.x; lastY = pos.y;
+            };
+
+            const stop = () => {
+                state.isDrawing = false;
+                state.isResizing = false;
+            };
+
+            targetCanvas.addEventListener('mousedown', start);
+            targetCanvas.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', stop);
+            targetCanvas.addEventListener('touchstart', (e) => { start(e); }, {passive: false});
+            targetCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); }, {passive: false});
+            targetCanvas.addEventListener('touchend', stop);
+        }
+
+        // 課題作成キャンバスの再描画（手書きは消さず、画像のみ管理するためのレイヤーが本来理想だが、今回は簡易化のためUI上に重ねる）
+        // ※実際には手書きはCanvas、画像はデータとして保持。配信時に合成。
+        function drawTaskCreateCanvas() {
+            // UI上の画像ガイドを描画したい場合はここにロジックを追加
+            // 今回は配信時の合成ロジックで完結させます。
+            const overlay = document.getElementById('task-image-overlay');
+            overlay.innerHTML = '';
+            state.floatingImages.forEach((imgData, idx) => {
+                const imgWrap = document.createElement('div');
+                imgWrap.className = `absolute border-2 ${state.selectedImageIdx === idx ? 'border-blue-500' : 'border-transparent'}`;
+                imgWrap.style.left = `${imgData.x}px`;
+                imgWrap.style.top = `${imgData.y}px`;
+                imgWrap.style.width = `${imgData.w}px`;
+                imgWrap.style.height = `${imgData.h}px`;
+                imgWrap.style.backgroundImage = `url(${imgData.img.src})`;
+                imgWrap.style.backgroundSize = '100% 100%';
+                imgWrap.style.pointerEvents = 'none'; // イベントはCanvas側で拾う
+
+                if (state.selectedImageIdx === idx) {
+                    const handle = document.createElement('div');
+                    handle.className = "absolute right-[-10px] bottom-[-10px] w-5 h-5 bg-blue-500 rounded-full border-2 border-white";
+                    imgWrap.appendChild(handle);
+                    
+                    const del = document.createElement('div');
+                    del.className = "absolute left-[-10px] top-[-10px] w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] font-bold cursor-pointer pointer-events-auto";
+                    del.textContent = '×';
+                    del.onclick = (e) => {
+                        e.stopPropagation();
+                        state.floatingImages.splice(idx, 1);
+                        state.selectedImageIdx = -1;
+                        drawTaskCreateCanvas();
+                    };
+                    imgWrap.appendChild(del);
+                }
+                overlay.appendChild(imgWrap);
+            });
+        }
+
         window.openTaskCreateModal = () => {
             state.isTaskCreating = true;
+            state.floatingImages = [];
+            state.selectedImageIdx = -1;
             const modal = document.getElementById('task-create-modal');
             modal.classList.remove('hidden');
 
@@ -244,6 +395,7 @@
             ctx.clearRect(0, 0, taskCreateCanvas.width, taskCreateCanvas.height);
             document.getElementById('task-create-bg').style.backgroundImage = '';
             document.getElementById('task-title-input').value = "";
+            drawTaskCreateCanvas();
         };
 
         window.closeTaskCreateModal = () => {
@@ -251,48 +403,44 @@
             document.getElementById('task-create-modal').classList.add('hidden');
         };
 
-        // 課題作成用の背景画像選択
         window.handleTaskImageUpload = (e) => {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (event) => {
-                document.getElementById('task-create-bg').style.backgroundImage = `url(${event.target.result})`;
+                const img = new Image();
+                img.onload = () => {
+                    // 背景としてではなく、移動可能な画像として追加
+                    state.floatingImages.push({
+                        img: img,
+                        x: 50,
+                        y: 50,
+                        w: img.width > 300 ? 300 : img.width,
+                        h: img.width > 300 ? (img.height * (300 / img.width)) : img.height
+                    });
+                    drawTaskCreateCanvas();
+                };
+                img.src = event.target.result;
             };
             reader.readAsDataURL(file);
         };
 
-        // 課題を配信する
         window.finalizeAndDistribute = async () => {
             const title = document.getElementById('task-title-input').value || "新しい課題";
-            
-            // 背景画像と手書きを合成した新しい画像を作成
             const offscreen = document.createElement('canvas');
             offscreen.width = taskCreateCanvas.width;
             offscreen.height = taskCreateCanvas.height;
             const octx = offscreen.getContext('2d');
 
-            // 1. 白背景
             octx.fillStyle = "white";
             octx.fillRect(0, 0, offscreen.width, offscreen.height);
 
-            // 2. 背景画像があれば描画
-            const bgStyle = document.getElementById('task-create-bg').style.backgroundImage;
-            if (bgStyle) {
-                const url = bgStyle.slice(5, -2);
-                const img = await new Promise(resolve => {
-                    const i = new Image();
-                    i.onload = () => resolve(i);
-                    i.src = url;
-                });
-                // アスペクト比を維持して描画
-                const ratio = Math.min(offscreen.width / img.width, offscreen.height / img.height);
-                const x = (offscreen.width - img.width * ratio) / 2;
-                const y = (offscreen.height - img.height * ratio) / 2;
-                octx.drawImage(img, x, y, img.width * ratio, img.height * ratio);
+            // 1. 貼り付けられた画像を先に描画
+            for (let imgData of state.floatingImages) {
+                octx.drawImage(imgData.img, imgData.x, imgData.y, imgData.w, imgData.h);
             }
 
-            // 3. 先生の手書きを重ねる
+            // 2. 先生の手書きを重ねる
             octx.drawImage(taskCreateCanvas, 0, 0);
 
             const finalDataUrl = offscreen.toDataURL('image/webp', 0.5);
@@ -317,17 +465,6 @@
             const rect = container.getBoundingClientRect();
             feedbackCanvas.width = rect.width;
             feedbackCanvas.height = rect.height;
-            
-            const titleEl = document.getElementById('feedback-modal-title');
-            const toolsEl = document.getElementById('teacher-tools');
-            
-            if (state.role === 'teacher') {
-                titleEl.textContent = `${name} さんの画面を添削中`;
-                toolsEl.classList.remove('hidden');
-            } else {
-                titleEl.textContent = `${name} さんの作品（閲覧中）`;
-                toolsEl.classList.add('hidden');
-            }
             
             const snap = await getDoc(doc(db, 'student-canvas', uid));
             if (snap.exists()) {
@@ -361,11 +498,16 @@
         };
 
         window.clearCanvas = (id) => {
-            const target = document.getElementById(id);
-            const tctx = target.getContext('2d');
             if (confirm("すべて消去しますか？")) {
+                const target = document.getElementById(id);
+                const tctx = target.getContext('2d');
                 tctx.clearRect(0, 0, target.width, target.height);
-                if (id !== 'task-create-canvas') syncCanvas();
+                if (id === 'task-create-canvas') {
+                    state.floatingImages = [];
+                    drawTaskCreateCanvas();
+                } else {
+                    syncCanvas();
+                }
             }
         };
 
@@ -419,13 +561,6 @@
                 submissionsView.classList.remove('hidden');
                 viewSwitch.classList.add('hidden');
                 publicToggleBtn.classList.remove('hidden');
-                if (state.isPublic) {
-                    publicToggleBtn.textContent = "公開中";
-                    publicToggleBtn.className = "bg-green-600 text-white px-3 py-1 rounded text-xs font-bold shadow-md animate-pulse";
-                } else {
-                    publicToggleBtn.textContent = "非公開";
-                    publicToggleBtn.className = "bg-gray-500 text-white px-3 py-1 rounded text-xs font-bold shadow-md";
-                }
             } else {
                 teacherView.classList.add('hidden');
                 publicToggleBtn.classList.add('hidden');
@@ -435,17 +570,12 @@
                     viewSwitch.classList.add('hidden');
                     state.viewMode = 'mine';
                 }
-                
                 if (state.viewMode === 'mine') {
                     studentView.classList.remove('hidden');
                     submissionsView.classList.add('hidden');
-                    document.getElementById('btn-mine').className = "flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg transform scale-105 z-10 transition-all";
-                    document.getElementById('btn-others').className = "flex-1 py-3 bg-gray-200 text-gray-500 rounded-xl font-bold transition-all";
                 } else {
                     studentView.classList.add('hidden');
                     submissionsView.classList.remove('hidden');
-                    document.getElementById('btn-mine').className = "flex-1 py-3 bg-gray-200 text-gray-500 rounded-xl font-bold transition-all";
-                    document.getElementById('btn-others').className = "flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg transform scale-105 z-10 transition-all";
                 }
             }
         }
@@ -460,30 +590,10 @@
     </script>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
-        body { 
-            touch-action: none; 
-            -webkit-user-select: none; 
-            user-select: none; 
-            overflow: hidden;
-            position: fixed;
-            width: 100%;
-            height: 100%;
-            margin: 0;
-            padding: 0;
-        }
-        .canvas-container { 
-            position: relative; 
-            width: 100%; 
-            background: white; 
-            z-index: 10;
-            touch-action: none;
-        }
-        canvas { 
-            display: block; 
-            touch-action: none;
-        }
+        body { touch-action: none; -webkit-user-select: none; user-select: none; overflow: hidden; position: fixed; width: 100%; height: 100%; margin: 0; padding: 0; }
+        .canvas-container { position: relative; width: 100%; background: white; z-index: 10; touch-action: none; }
+        canvas { display: block; touch-action: none; }
         #feedback-layer { pointer-events: none; z-index: 20; }
-        #submissions-grid { -webkit-overflow-scrolling: touch; }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
@@ -493,25 +603,21 @@
     </nav>
 
     <div class="p-2 flex-grow flex flex-col overflow-hidden relative">
-        <!-- 課題タイトル表示 -->
         <div id="task-container" class="bg-white p-2 rounded shadow mb-2 border-l-4 border-blue-500 flex justify-between items-center flex-shrink-0">
             <h2 id="task-display" class="text-xs font-bold truncate italic text-gray-700 max-w-[70%]"></h2>
-            <button id="public-toggle-btn" onclick="togglePublic()" class="hidden"></button>
+            <button id="public-toggle-btn" onclick="togglePublic()" class="hidden px-3 py-1 bg-blue-600 text-white rounded text-[10px] font-bold">全員公開</button>
         </div>
 
-        <!-- 児童用：表示切り替えスイッチ -->
         <div id="view-switch" class="hidden flex gap-2 mb-2 px-1 flex-shrink-0">
-            <button id="btn-mine" onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold transition-all text-sm">自分の画面</button>
-            <button id="btn-others" onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold transition-all text-sm">みんなの画面</button>
+            <button id="btn-mine" onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold bg-blue-600 text-white shadow-lg text-sm">自分の画面</button>
+            <button id="btn-others" onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold bg-gray-200 text-gray-500 text-sm">みんなの画面</button>
         </div>
         
-        <!-- 自分のキャンバス (児童) -->
         <div id="student-view" class="flex-grow flex flex-col gap-1 overflow-hidden">
-            <div id="student-tools" class="bg-white p-2 rounded shadow flex gap-4 items-center overflow-x-auto flex-shrink-0 z-30">
-                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow-sm flex-shrink-0"></button>
-                <button onclick="setPenColor('#ff4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow-sm flex-shrink-0"></button>
-                <button onclick="setPenColor('#4444ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-sm flex-shrink-0"></button>
-                <button onclick="setPenColor('#22cc55')" class="w-8 h-8 rounded-full bg-green-500 border-2 border-white shadow-sm flex-shrink-0"></button>
+            <div id="student-tools" class="bg-white p-2 rounded shadow flex gap-4 items-center flex-shrink-0 z-30">
+                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow-sm"></button>
+                <button onclick="setPenColor('#ff4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow-sm"></button>
+                <button onclick="setPenColor('#4444ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-sm"></button>
                 <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[10px] text-gray-500 font-bold px-2 py-1 bg-gray-100 rounded">消去</button>
             </div>
             <div class="canvas-container flex-grow border-2 border-gray-300 rounded-xl shadow-inner relative overflow-hidden bg-white">
@@ -521,13 +627,11 @@
             </div>
         </div>
 
-        <!-- 先生用：操作パネル -->
         <div id="teacher-view" class="hidden bg-blue-50 p-2 rounded border border-blue-200 flex flex-wrap gap-2 items-center mb-2 flex-shrink-0">
-            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-md hover:bg-blue-800 active:scale-95 transition-all">課題作成・配信</button>
-            <p class="text-[10px] text-blue-800 italic">←ここから画像や指示を書いて配付できます</p>
+            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-md">課題作成・配信</button>
+            <p class="text-[9px] text-blue-800 leading-tight">画像を貼り付け(Ctrl+V)て動かしたり、ペンで書けます。</p>
         </div>
 
-        <!-- みんなの作品一覧 -->
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
             <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-y-auto pb-10 p-1"></div>
         </div>
@@ -537,32 +641,33 @@
     <div id="task-create-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="bg-white rounded-xl flex flex-col h-full overflow-hidden">
             <div class="bg-blue-800 text-white p-3 flex justify-between items-center">
-                <h3 class="font-bold text-sm">新規課題の作成</h3>
-                <button onclick="closeTaskCreateModal()" class="text-xs bg-red-500 px-3 py-1 rounded">キャンセル</button>
+                <h3 class="font-bold text-sm italic">課題作成（画像を貼り付けて動かせます）</h3>
+                <button onclick="closeTaskCreateModal()" class="text-xs bg-red-500 px-3 py-1 rounded">戻る</button>
             </div>
             
-            <div class="p-3 border-b flex flex-wrap gap-3 items-center">
-                <input type="text" id="task-title-input" placeholder="課題名を入力 (例: かんじの練習)" class="border p-2 rounded text-sm flex-grow">
-                <label class="bg-gray-100 px-3 py-2 rounded border cursor-pointer text-xs font-bold">
-                    画像を選択
+            <div class="p-2 border-b flex flex-wrap gap-3 items-center">
+                <input type="text" id="task-title-input" placeholder="課題名を入力" class="border p-2 rounded text-xs flex-grow">
+                <label class="bg-gray-100 px-3 py-1.5 rounded border cursor-pointer text-[10px] font-bold">
+                    画像追加
                     <input type="file" accept="image/*" class="hidden" onchange="handleTaskImageUpload(event)">
                 </label>
             </div>
 
             <div class="bg-gray-50 p-2 flex gap-4 items-center">
-                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white"></button>
-                <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-white"></button>
-                <button onclick="setPenColor('#0000ff')" class="w-8 h-8 rounded-full bg-blue-600 border-2 border-white"></button>
+                <button onclick="setPenColor('#000000')" class="w-7 h-7 rounded-full bg-black border-2 border-white"></button>
+                <button onclick="setPenColor('#ff0000')" class="w-7 h-7 rounded-full bg-red-600 border-2 border-white"></button>
+                <button onclick="setPenColor('#0000ff')" class="w-7 h-7 rounded-full bg-blue-600 border-2 border-white"></button>
                 <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-white border px-2 py-1 rounded">全消去</button>
             </div>
 
             <div class="canvas-container flex-grow relative bg-white overflow-hidden border-b-2 border-blue-100">
-                <div id="task-create-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat opacity-60"></div>
+                <!-- 画像を動かすためのオーバーレイ層 -->
+                <div id="task-image-overlay" class="absolute inset-0 z-20 pointer-events-none"></div>
                 <canvas id="task-create-canvas" class="absolute inset-0 z-10"></canvas>
             </div>
 
-            <div class="p-4 bg-blue-50 text-center">
-                <button onclick="finalizeAndDistribute()" class="bg-blue-600 text-white px-10 py-3 rounded-full font-bold shadow-xl active:scale-95 transition-all">この内容で配信する</button>
+            <div class="p-3 bg-blue-50 text-center">
+                <button onclick="finalizeAndDistribute()" class="bg-blue-600 text-white px-10 py-3 rounded-full font-bold shadow-xl">この内容で全児童へ配信</button>
             </div>
         </div>
     </div>
@@ -570,14 +675,13 @@
     <!-- 添削モーダル -->
     <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="flex justify-between items-center text-white mb-2 px-2">
-            <h3 id="feedback-modal-title" class="font-bold text-sm">プレビュー</h3>
-            <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-xs font-bold shadow-lg">戻る</button>
+            <h3 id="feedback-modal-title" class="font-bold text-sm italic">添削中</h3>
+            <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-xs font-bold">戻る</button>
         </div>
         <div id="teacher-tools" class="hidden bg-white p-3 rounded-t-xl flex gap-6 items-center flex-shrink-0">
-            <button onclick="setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-2 border-white shadow"></button>
-            <button onclick="setPenColor('#ff00ff')" class="w-10 h-10 rounded-full bg-pink-500 border-2 border-white shadow"></button>
-            <button onclick="setPenColor('#000000')" class="w-10 h-10 rounded-full bg-black border-2 border-white shadow"></button>
-            <button onclick="clearCanvas('feedback-canvas')" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md border border-gray-300 font-bold">消去</button>
+            <button onclick="setPenColor('#ff0000')" class="w-9 h-9 rounded-full bg-red-600 border-2 border-white shadow"></button>
+            <button onclick="setPenColor('#000000')" class="w-9 h-9 rounded-full bg-black border-2 border-white shadow"></button>
+            <button onclick="clearCanvas('feedback-canvas')" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md font-bold">消去</button>
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-b-xl overflow-hidden">
             <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
