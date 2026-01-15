@@ -30,7 +30,8 @@
             isPublic: false,
             isDrawing: false,
             brushColor: '#000000',
-            brushSize: 3,
+            brushSize: 4,
+            isEraser: false,
             bgImage: null,
             editingStudentId: null,
             isTaskCreating: false,
@@ -257,8 +258,17 @@
                 if (!window.state.isDrawing) return;
                 const tctx = targetCanvas.getContext('2d');
                 const pos = getPos(e);
-                tctx.strokeStyle = window.state.brushColor;
-                tctx.lineWidth = window.state.brushSize;
+                
+                // 消しゴムモードかどうかの判定
+                if (window.state.isEraser) {
+                    tctx.globalCompositeOperation = 'destination-out';
+                    tctx.lineWidth = 20; // 消しゴムは太め
+                } else {
+                    tctx.globalCompositeOperation = 'source-over';
+                    tctx.strokeStyle = window.state.brushColor;
+                    tctx.lineWidth = window.state.brushSize;
+                }
+                
                 tctx.lineJoin = 'round';
                 tctx.lineCap = 'round';
                 tctx.lineTo(pos.x, pos.y);
@@ -359,8 +369,14 @@
                     window.drawTaskCreateCanvas();
                 } else if (window.state.isDrawing) {
                     const ctx = targetCanvas.getContext('2d');
-                    ctx.strokeStyle = window.state.brushColor;
-                    ctx.lineWidth = window.state.brushSize;
+                    if (window.state.isEraser) {
+                        ctx.globalCompositeOperation = 'destination-out';
+                        ctx.lineWidth = 20;
+                    } else {
+                        ctx.globalCompositeOperation = 'source-over';
+                        ctx.strokeStyle = window.state.brushColor;
+                        ctx.lineWidth = window.state.brushSize;
+                    }
                     ctx.lineJoin = 'round';
                     ctx.lineCap = 'round';
                     ctx.lineTo(pos.x, pos.y);
@@ -419,6 +435,8 @@
             window.state.isTaskCreating = true;
             window.state.floatingImages = [];
             window.state.selectedImageIdx = -1;
+            window.state.isEraser = false;
+            window.state.brushColor = '#000000';
             const modal = document.getElementById('task-create-modal');
             modal.classList.remove('hidden');
             const container = window.taskCreateCanvas.parentElement;
@@ -429,6 +447,7 @@
             ctx.clearRect(0, 0, window.taskCreateCanvas.width, window.taskCreateCanvas.height);
             document.getElementById('task-title-input').value = "";
             window.drawTaskCreateCanvas();
+            window.updateToolStyles();
         };
 
         window.closeTaskCreateModal = () => {
@@ -468,7 +487,9 @@
             for (let imgData of window.state.floatingImages) {
                 octx.drawImage(imgData.img, imgData.x, imgData.y, imgData.w, imgData.h);
             }
+            // 描画部分（消しゴムを反映させるために合成モードを意識して描画）
             octx.drawImage(window.taskCreateCanvas, 0, 0);
+            
             const finalDataUrl = offscreen.toDataURL('image/jpeg', 0.8); 
             if (confirm("この内容をクラス全員に配信しますか？")) {
                 await setDoc(getRoomDoc('settings', 'current'), { 
@@ -484,6 +505,7 @@
         window.openPreviewModal = async (uid, name) => {
             window.state.editingStudentId = uid;
             window.state.brushColor = '#ff0000';
+            window.state.isEraser = false;
             const modal = document.getElementById('feedback-modal');
             modal.classList.remove('hidden');
             
@@ -518,6 +540,7 @@
                     img.src = data.feedbackData;
                 }
             }
+            window.updateToolStyles();
         };
 
         window.closeFeedbackModal = () => {
@@ -607,7 +630,6 @@
 
             list.forEach(data => {
                 const div = document.createElement('div');
-                // Height adjusted to auto, added slight shadow and border refinement
                 div.className = "bg-white p-1 border border-gray-200 rounded-md shadow-sm cursor-pointer hover:border-blue-400 relative h-auto overflow-hidden transition-all active:scale-95";
                 
                 const bgImgHtml = window.state.bgImage ? `<img src="${window.state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10">` : '';
@@ -666,6 +688,23 @@
                 if (window.state.viewMode === 'mine') { studentView.classList.remove('hidden'); submissionsView.classList.add('hidden'); } 
                 else { studentView.classList.add('hidden'); submissionsView.classList.remove('hidden'); }
             }
+            window.updateToolStyles();
+        };
+
+        window.updateToolStyles = () => {
+            const btns = document.querySelectorAll('.tool-btn');
+            btns.forEach(btn => {
+                const color = btn.getAttribute('data-color');
+                const type = btn.getAttribute('data-type');
+                
+                btn.classList.remove('ring-4', 'ring-blue-400', 'ring-offset-2');
+                
+                if (type === 'eraser' && window.state.isEraser) {
+                    btn.classList.add('ring-4', 'ring-blue-400', 'ring-offset-2');
+                } else if (type === 'color' && !window.state.isEraser && window.state.brushColor === color) {
+                    btn.classList.add('ring-4', 'ring-blue-400', 'ring-offset-2');
+                }
+            });
         };
 
         function checkUrlParams() {
@@ -687,7 +726,17 @@
             }
         }
 
-        window.setPenColor = (c) => window.state.brushColor = c;
+        window.setPenColor = (c) => {
+            window.state.brushColor = c;
+            window.state.isEraser = false;
+            window.updateToolStyles();
+        };
+
+        window.setEraser = () => {
+            window.state.isEraser = true;
+            window.updateToolStyles();
+        };
+
         window.changeName = () => {
             const newName = prompt("新しいなまえを入力してください", window.state.userName);
             if (newName) {
@@ -723,6 +772,8 @@
         #feedback-task-bg { z-index: 100; }
         #feedback-bg { z-index: 101; }
         #feedback-canvas { z-index: 102; }
+
+        .tool-btn { transition: all 0.2s; }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
@@ -750,9 +801,13 @@
         
         <div id="student-view" class="flex-grow flex flex-col gap-1 overflow-hidden">
             <div id="student-tools" class="bg-white p-2 rounded-t-xl shadow-md flex gap-4 items-center flex-shrink-0 z-30 border-b">
-                <button onclick="window.setPenColor('#000000')" class="w-9 h-9 rounded-full bg-black border-4 border-gray-100 shadow-sm transition-transform active:scale-110"></button>
-                <button onclick="window.setPenColor('#ff4444')" class="w-9 h-9 rounded-full bg-red-500 border-4 border-gray-100 shadow-sm transition-transform active:scale-110"></button>
-                <button onclick="window.setPenColor('#4444ff')" class="w-9 h-9 rounded-full bg-blue-500 border-4 border-gray-100 shadow-sm transition-transform active:scale-110"></button>
+                <button onclick="window.setPenColor('#000000')" data-color="#000000" data-type="color" class="tool-btn w-9 h-9 rounded-full bg-black border-2 border-gray-100 shadow-sm active:scale-110"></button>
+                <button onclick="window.setPenColor('#ff4444')" data-color="#ff4444" data-type="color" class="tool-btn w-9 h-9 rounded-full bg-red-500 border-2 border-gray-100 shadow-sm active:scale-110"></button>
+                <button onclick="window.setPenColor('#4444ff')" data-color="#4444ff" data-type="color" class="tool-btn w-9 h-9 rounded-full bg-blue-500 border-2 border-gray-100 shadow-sm active:scale-110"></button>
+                <!-- 消しゴム -->
+                <button onclick="window.setEraser()" data-type="eraser" class="tool-btn w-9 h-9 rounded-full bg-white border-2 border-gray-300 shadow-sm flex items-center justify-center active:scale-110">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-600"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.9-9.9c1-1 2.5-1 3.4 0l4.4 4.4c1 1 1 2.5 0 3.4L10.5 21z"/><path d="m15 5 4 4"/></svg>
+                </button>
                 <button onclick="window.clearCanvas('drawing-canvas')" class="ml-auto text-[11px] text-red-500 font-bold px-3 py-1 bg-red-50 rounded-full border border-red-100">全部消す</button>
             </div>
             <div class="canvas-container flex-grow border-x-2 border-b-2 border-gray-200 rounded-b-xl shadow-sm relative overflow-hidden bg-white">
@@ -773,7 +828,6 @@
         </div>
 
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
-            <!-- Grid gap narrowed for tighter look -->
             <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 gap-2 overflow-y-auto pb-20 p-1"></div>
         </div>
     </div>
@@ -793,9 +847,13 @@
                 </label>
             </div>
             <div class="bg-white p-3 flex gap-5 items-center border-b">
-                <button onclick="window.setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-gray-200"></button>
-                <button onclick="window.setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-gray-200"></button>
-                <button onclick="window.setPenColor('#0000ff')" class="w-8 h-8 rounded-full bg-blue-600 border-2 border-gray-200"></button>
+                <button onclick="window.setPenColor('#000000')" data-color="#000000" data-type="color" class="tool-btn w-8 h-8 rounded-full bg-black border-2 border-gray-200"></button>
+                <button onclick="window.setPenColor('#ff0000')" data-color="#ff0000" data-type="color" class="tool-btn w-8 h-8 rounded-full bg-red-600 border-2 border-gray-200"></button>
+                <button onclick="window.setPenColor('#0000ff')" data-color="#0000ff" data-type="color" class="tool-btn w-8 h-8 rounded-full bg-blue-600 border-2 border-gray-200"></button>
+                <!-- 課題作成用消しゴム -->
+                <button onclick="window.setEraser()" data-type="eraser" class="tool-btn w-8 h-8 rounded-full bg-white border-2 border-gray-300 flex items-center justify-center">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-600"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.9-9.9c1-1 2.5-1 3.4 0l4.4 4.4c1 1 1 2.5 0 3.4L10.5 21z"/><path d="m15 5 4 4"/></svg>
+                </button>
                 <button onclick="window.clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full font-bold">リセット</button>
             </div>
             <div class="canvas-container flex-grow relative bg-white overflow-hidden">
@@ -815,7 +873,11 @@
         <div class="flex justify-between items-center text-white mb-3 px-4 pt-2">
             <h3 class="font-bold text-sm">ノートを添削中</h3>
             <div class="flex gap-4 items-center">
-                <button onclick="window.setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-4 border-white shadow-lg"></button>
+                <button onclick="window.setPenColor('#ff0000')" data-color="#ff0000" data-type="color" class="tool-btn w-10 h-10 rounded-full bg-red-600 border-4 border-white shadow-lg"></button>
+                <!-- 添削用消しゴム -->
+                <button onclick="window.setEraser()" data-type="eraser" class="tool-btn w-10 h-10 rounded-full bg-white border-4 border-gray-300 shadow-lg flex items-center justify-center">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-700"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.9-9.9c1-1 2.5-1 3.4 0l4.4 4.4c1 1 1 2.5 0 3.4L10.5 21z"/><path d="m15 5 4 4"/></svg>
+                </button>
                 <button onclick="window.resetStudentCanvas()" class="bg-red-600 px-4 py-2 rounded-full text-[10px] font-bold shadow-md">この回答をリセット</button>
                 <button onclick="window.closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-[10px] font-bold shadow-md">戻る</button>
             </div>
