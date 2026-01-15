@@ -100,8 +100,8 @@
                                 img: img,
                                 x: 50,
                                 y: 50,
-                                w: img.width > 300 ? 300 : img.width,
-                                h: img.width > 300 ? (img.height * (300 / img.width)) : img.height
+                                w: img.width > 400 ? 400 : img.width,
+                                h: img.width > 400 ? (img.height * (400 / img.width)) : img.height
                             });
                             drawTaskCreateCanvas();
                         };
@@ -124,7 +124,6 @@
                     if (state.role === 'student' && !state.isPublic) state.viewMode = 'mine';
                     applyBg();
                     updateUI();
-                    refreshSubmissions();
                 }
             });
 
@@ -144,8 +143,6 @@
             });
         }
 
-        async function refreshSubmissions() {}
-
         function renderFeedback(dataUrl) {
             const img = new Image();
             img.onload = () => {
@@ -161,7 +158,7 @@
 
         async function syncCanvas() {
             if (state.role === 'student' && state.user && db) {
-                const dataUrl = canvas.toDataURL('image/webp', 0.2);
+                const dataUrl = canvas.toDataURL('image/webp', 0.5);
                 await setDoc(doc(db, 'student-canvas', state.user.uid), {
                     uid: state.user.uid,
                     name: state.userName,
@@ -170,7 +167,7 @@
                 }, { merge: true });
             }
             if (state.role === 'teacher' && state.editingStudentId && db) {
-                const feedbackDataUrl = feedbackCanvas.toDataURL('image/webp', 0.2);
+                const feedbackDataUrl = feedbackCanvas.toDataURL('image/webp', 0.5);
                 await setDoc(doc(db, 'student-canvas', state.editingStudentId), {
                     feedbackData: feedbackDataUrl,
                     lastUpdate: Date.now()
@@ -193,7 +190,7 @@
             const temp = document.createElement('canvas');
             temp.width = canvas.width;
             temp.height = canvas.height;
-            temp.getContext('2d').drawImage(canvas, 0, 0);
+            if (canvas.width > 0) temp.getContext('2d').drawImage(canvas, 0, 0);
             
             canvas.width = rect.width;
             canvas.height = availableH;
@@ -201,7 +198,7 @@
             feedbackLayer.width = canvas.width;
             feedbackLayer.height = canvas.height;
             
-            canvas.getContext('2d').drawImage(temp, 0, 0, canvas.width, canvas.height);
+            if (temp.width > 0) canvas.getContext('2d').drawImage(temp, 0, 0, canvas.width, canvas.height);
             applyBg();
         }
 
@@ -267,14 +264,17 @@
                 state.isResizing = false;
                 state.isDraggingImage = false;
 
+                // 画像の当たり判定
                 for (let i = state.floatingImages.length - 1; i >= 0; i--) {
                     const img = state.floatingImages[i];
-                    if (pos.x > img.x + img.w - 30 && pos.x < img.x + img.w + 20 &&
-                        pos.y > img.y + img.h - 30 && pos.y < img.y + img.h + 20) {
+                    // 右下のハンドル
+                    if (pos.x > img.x + img.w - 40 && pos.x < img.x + img.w + 20 &&
+                        pos.y > img.y + img.h - 40 && pos.y < img.y + img.h + 20) {
                         state.selectedImageIdx = i;
                         state.isResizing = true;
                         break;
                     }
+                    // 画像本体
                     if (pos.x > img.x && pos.x < img.x + img.w && pos.y > img.y && pos.y < img.y + img.h) {
                         state.selectedImageIdx = i;
                         state.isDraggingImage = true;
@@ -337,23 +337,25 @@
             overlay.innerHTML = '';
             state.floatingImages.forEach((imgData, idx) => {
                 const imgWrap = document.createElement('div');
-                imgWrap.className = `absolute border-2 ${state.selectedImageIdx === idx ? 'border-blue-500 shadow-xl z-30' : 'border-transparent z-20'}`;
+                // 枠線の透明度も見直し
+                imgWrap.className = `absolute border-2 ${state.selectedImageIdx === idx ? 'border-blue-500 shadow-2xl z-30' : 'border-gray-300 z-20'}`;
                 imgWrap.style.left = `${imgData.x}px`;
                 imgWrap.style.top = `${imgData.y}px`;
                 imgWrap.style.width = `${imgData.w}px`;
                 imgWrap.style.height = `${imgData.h}px`;
                 imgWrap.style.backgroundImage = `url(${imgData.img.src})`;
                 imgWrap.style.backgroundSize = '100% 100%';
+                imgWrap.style.opacity = "1"; // 強制
                 imgWrap.style.pointerEvents = 'none'; 
 
                 if (state.selectedImageIdx === idx) {
                     const handle = document.createElement('div');
-                    handle.className = "absolute right-[-12px] bottom-[-12px] w-6 h-6 bg-blue-600 rounded-full border-2 border-white flex items-center justify-center shadow-lg pointer-events-none";
-                    handle.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="white"><path d="M21 15v6h-6M9 3H3v6M21 3l-6 6M3 21l6-6"/></svg>`;
+                    handle.className = "absolute right-[-15px] bottom-[-15px] w-8 h-8 bg-blue-600 rounded-full border-2 border-white flex items-center justify-center shadow-lg pointer-events-none";
+                    handle.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M21 15v6h-6M9 3H3v6M21 3l-6 6M3 21l6-6"/></svg>`;
                     imgWrap.appendChild(handle);
                     
                     const del = document.createElement('div');
-                    del.className = "absolute left-[-12px] top-[-12px] w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-[12px] font-bold cursor-pointer pointer-events-auto shadow-md";
+                    del.className = "absolute left-[-15px] top-[-15px] w-8 h-8 bg-red-600 text-white rounded-full flex items-center justify-center text-[14px] font-bold cursor-pointer pointer-events-auto shadow-md";
                     del.textContent = '×';
                     del.onclick = (e) => {
                         e.stopPropagation();
@@ -397,10 +399,10 @@
                 img.onload = () => {
                     state.floatingImages.push({
                         img: img,
-                        x: 50,
-                        y: 50,
-                        w: img.width > 300 ? 300 : img.width,
-                        h: img.width > 300 ? (img.height * (300 / img.width)) : img.height
+                        x: 100,
+                        y: 100,
+                        w: img.width > 400 ? 400 : img.width,
+                        h: img.width > 400 ? (img.height * (400 / img.width)) : img.height
                     });
                     drawTaskCreateCanvas();
                 };
@@ -416,17 +418,24 @@
             offscreen.height = taskCreateCanvas.height;
             const octx = offscreen.getContext('2d');
             
-            // 重要な修正: ベースを完全に白く塗ることで配信後の透過を防ぐ
-            octx.fillStyle = "white";
+            // 背景を完全に不透明な白で塗りつぶす
+            octx.fillStyle = "#ffffff";
             octx.fillRect(0, 0, offscreen.width, offscreen.height);
             
+            // 1. 貼り付けられた画像を描画（不透明度100%）
             for (let imgData of state.floatingImages) {
+                octx.globalAlpha = 1.0;
                 octx.drawImage(imgData.img, imgData.x, imgData.y, imgData.w, imgData.h);
             }
+            
+            // 2. その上に先生の書き込みを重ねる
+            octx.globalAlpha = 1.0;
             octx.drawImage(taskCreateCanvas, 0, 0);
             
-            const finalDataUrl = offscreen.toDataURL('image/webp', 0.8); // 画質も少し向上
-            if (confirm("この内容で全児童に配信しますか？")) {
+            // 高画質で書き出し
+            const finalDataUrl = offscreen.toDataURL('image/jpeg', 0.9); 
+
+            if (confirm("この内容（画像＋手書き）で全児童に配信しますか？")) {
                 await setDoc(doc(db, 'class-settings', 'current'), { 
                     taskTitle: title, 
                     bgImage: finalDataUrl,
@@ -450,19 +459,12 @@
             const snap = await getDoc(doc(db, 'student-canvas', uid));
             if (snap.exists()) {
                 const data = snap.data();
-                
-                // 1. 課題画像の設定（最背面）
                 const feedbackTaskBg = document.getElementById('feedback-task-bg');
                 if (state.bgImage) {
                     feedbackTaskBg.style.backgroundImage = `url(${state.bgImage})`;
-                } else {
-                    feedbackTaskBg.style.backgroundImage = 'none';
                 }
-
-                // 2. 児童の回答画像（中間面）
                 document.getElementById('feedback-bg').style.backgroundImage = `url(${data.canvasData})`;
                 
-                // 3. 先生の添削（前面Canvas）
                 const fctx = feedbackCanvas.getContext('2d');
                 fctx.clearRect(0, 0, feedbackCanvas.width, feedbackCanvas.height);
                 if (data.feedbackData) {
@@ -513,6 +515,7 @@
                     bg.style.backgroundSize = 'contain';
                     bg.style.backgroundPosition = 'center';
                     bg.style.backgroundRepeat = 'no-repeat';
+                    bg.style.opacity = "1";
                 }
             });
         }
@@ -524,17 +527,16 @@
             list.sort((a,b) => b.lastUpdate - a.lastUpdate);
             list.forEach(data => {
                 const div = document.createElement('div');
-                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[160px] overflow-hidden";
+                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[180px] overflow-hidden";
                 
-                // 重要な修正: 一覧画面でも背景をしっかり表示
-                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10">` : '';
-                const canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20">`;
-                const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30">` : '';
+                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10 opacity-100">` : '';
+                const canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20 opacity-100">`;
+                const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30 opacity-100">` : '';
 
                 div.innerHTML = `
                     <div class="absolute inset-0 z-[60] bg-transparent"></div>
-                    <p class="text-[10px] font-bold truncate text-blue-700 mb-1 relative z-[70]">${data.name}</p>
-                    <div class="relative aspect-[4/3] border bg-gray-50 pointer-events-none overflow-hidden h-[120px]">
+                    <p class="text-[11px] font-bold truncate text-blue-800 mb-1 relative z-[70] bg-white bg-opacity-80 px-1">${data.name}</p>
+                    <div class="relative aspect-[4/3] border bg-white pointer-events-none overflow-hidden h-[130px]">
                         ${bgImgHtml}
                         ${canvasImgHtml}
                         ${feedbackImgHtml}
@@ -582,99 +584,115 @@
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
         body { touch-action: none; -webkit-user-select: none; user-select: none; overflow: hidden; position: fixed; width: 100%; height: 100%; margin: 0; padding: 0; }
         .canvas-container { position: relative; width: 100%; background: white; z-index: 10; touch-action: none; }
-        canvas { display: block; touch-action: none; }
+        canvas { display: block; touch-action: none; opacity: 1 !important; }
         #feedback-layer { pointer-events: none; z-index: 20; }
-        /* 重要な修正: 課題背景の不透明度を100%に */
-        .task-bg { opacity: 1 !important; }
+        
+        /* 全ての画像表示エリアで透明度を無効化 */
+        .task-bg, #feedback-task-bg, #feedback-bg { 
+            opacity: 1 !important; 
+            background-color: white;
+        }
+        img { opacity: 1 !important; }
     </style>
 </head>
-<body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
+<body class="bg-gray-200 flex flex-col font-sans text-gray-900 overflow-hidden">
     <nav class="bg-blue-900 text-white p-3 flex justify-between items-center shadow-lg flex-shrink-0 z-50">
-        <h1 class="font-bold text-sm">EdTech Canvas <span id="role-label" class="text-[10px] bg-blue-600 px-2 py-0.5 rounded-full ml-2"></span></h1>
+        <h1 class="font-bold text-sm">EdTech Canvas Pro <span id="role-label" class="text-[10px] bg-blue-600 px-2 py-0.5 rounded-full ml-2"></span></h1>
         <div id="name-label" class="text-xs font-medium"></div>
     </nav>
 
     <div class="p-2 flex-grow flex flex-col overflow-hidden relative">
-        <div id="task-container" class="bg-white p-2 rounded shadow mb-2 border-l-4 border-blue-500 flex justify-between items-center flex-shrink-0">
-            <h2 id="task-display" class="text-xs font-bold truncate italic text-gray-700 max-w-[70%]"></h2>
-            <button id="public-toggle-btn" onclick="togglePublic()" class="hidden px-3 py-1 bg-blue-600 text-white rounded text-[10px] font-bold">全員公開</button>
+        <!-- 課題名表示エリア -->
+        <div id="task-container" class="bg-white p-2 rounded-lg shadow mb-2 border-l-8 border-blue-600 flex justify-between items-center flex-shrink-0">
+            <h2 id="task-display" class="text-xs font-black truncate text-gray-800 max-w-[70%]"></h2>
+            <button id="public-toggle-btn" onclick="togglePublic()" class="hidden px-4 py-1.5 bg-blue-700 text-white rounded-full text-[10px] font-bold shadow-sm">回答を全員公開</button>
         </div>
 
+        <!-- 児童用：画面切り替えスイッチ -->
         <div id="view-switch" class="hidden flex gap-2 mb-2 px-1 flex-shrink-0">
-            <button onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold bg-blue-600 text-white shadow-lg text-sm">自分の画面</button>
-            <button onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold bg-gray-200 text-gray-500 text-sm">みんなの画面</button>
+            <button onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold bg-blue-600 text-white shadow-lg text-sm transition-all active:scale-95">自分のノート</button>
+            <button onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold bg-gray-300 text-gray-600 text-sm transition-all active:scale-95">みんなのノート</button>
         </div>
         
+        <!-- 児童用：メイン学習エリア -->
         <div id="student-view" class="flex-grow flex flex-col gap-1 overflow-hidden">
-            <div id="student-tools" class="bg-white p-2 rounded shadow flex gap-4 items-center flex-shrink-0 z-30">
-                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow-sm"></button>
-                <button onclick="setPenColor('#ff4444')" class="w-8 h-8 rounded-full bg-red-500 border-2 border-white shadow-sm"></button>
-                <button onclick="setPenColor('#4444ff')" class="w-8 h-8 rounded-full bg-blue-500 border-2 border-white shadow-sm"></button>
-                <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[10px] text-gray-500 font-bold px-2 py-1 bg-gray-100 rounded">消去</button>
+            <div id="student-tools" class="bg-white p-2 rounded-t-xl shadow-md flex gap-4 items-center flex-shrink-0 z-30 border-b">
+                <button onclick="setPenColor('#000000')" class="w-9 h-9 rounded-full bg-black border-4 border-gray-100 shadow-sm"></button>
+                <button onclick="setPenColor('#ff4444')" class="w-9 h-9 rounded-full bg-red-500 border-4 border-gray-100 shadow-sm"></button>
+                <button onclick="setPenColor('#4444ff')" class="w-9 h-9 rounded-full bg-blue-500 border-4 border-gray-100 shadow-sm"></button>
+                <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[11px] text-red-500 font-bold px-3 py-1 bg-red-50 rounded-full border border-red-100">全消し</button>
             </div>
-            <div class="canvas-container flex-grow border-2 border-gray-300 rounded-xl shadow-inner relative overflow-hidden bg-white">
+            <div class="canvas-container flex-grow border-x-2 border-b-2 border-gray-300 rounded-b-xl shadow-inner relative overflow-hidden bg-white">
                 <div class="task-bg absolute inset-0 pointer-events-none"></div>
                 <canvas id="drawing-canvas" class="absolute inset-0 z-10"></canvas>
                 <canvas id="feedback-layer" class="absolute inset-0 z-20"></canvas>
             </div>
         </div>
 
-        <div id="teacher-view" class="hidden bg-blue-50 p-2 rounded border border-blue-200 flex flex-wrap gap-2 items-center mb-2 flex-shrink-0">
-            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-md">課題作成・配信</button>
-            <p class="text-[9px] text-blue-800 leading-tight">Ctrl+Vで画像貼り付け、ドラッグで移動・リサイズ</p>
+        <!-- 先生用：操作パネル -->
+        <div id="teacher-view" class="hidden bg-white p-3 rounded-xl border-2 border-blue-400 flex flex-wrap gap-3 items-center mb-2 flex-shrink-0 shadow-lg">
+            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-6 py-2.5 rounded-full text-xs font-bold shadow-md hover:bg-blue-800 transition-colors">＋ 課題を作成して配信</button>
+            <div class="text-[10px] text-blue-900 bg-blue-50 p-2 rounded flex-grow border border-blue-100">
+                <span class="font-bold">ヒント:</span> 画像を貼り付けて、その上からペンで注釈を入れて配信できます。
+            </div>
         </div>
 
+        <!-- 回答一覧エリア -->
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
-            <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-y-auto pb-10 p-1"></div>
+            <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto pb-20 p-1"></div>
         </div>
     </div>
 
-    <!-- 課題作成モーダル -->
-    <div id="task-create-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
-        <div class="bg-white rounded-xl flex flex-col h-full overflow-hidden">
-            <div class="bg-blue-800 text-white p-3 flex justify-between items-center">
-                <h3 class="font-bold text-sm italic">課題作成</h3>
-                <button onclick="closeTaskCreateModal()" class="text-xs bg-red-500 px-3 py-1 rounded">戻る</button>
+    <!-- 課題作成モーダル（先生専用） -->
+    <div id="task-create-modal" class="fixed inset-0 bg-black bg-opacity-90 z-[100] hidden flex flex-col p-2 md:p-6">
+        <div class="bg-white rounded-2xl flex flex-col h-full overflow-hidden shadow-2xl">
+            <div class="bg-blue-800 text-white p-4 flex justify-between items-center">
+                <h3 class="font-bold text-base">課題の作成・編集</h3>
+                <button onclick="closeTaskCreateModal()" class="text-xs bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-full transition-colors">キャンセル</button>
             </div>
-            <div class="p-2 border-b flex flex-wrap gap-3 items-center">
-                <input type="text" id="task-title-input" placeholder="課題名を入力" class="border p-2 rounded text-xs flex-grow">
-                <label class="bg-gray-100 px-3 py-1.5 rounded border cursor-pointer text-[10px] font-bold">
-                    画像追加
+            <div class="p-3 border-b bg-gray-50 flex flex-wrap gap-4 items-center">
+                <input type="text" id="task-title-input" placeholder="ここに課題のタイトルを入力" class="border-2 border-blue-100 p-2 rounded-lg text-sm flex-grow outline-none focus:border-blue-400">
+                <label class="bg-blue-600 text-white px-5 py-2 rounded-full cursor-pointer text-xs font-bold shadow hover:bg-blue-700">
+                    画像を挿入
                     <input type="file" accept="image/*" class="hidden" onchange="handleTaskImageUpload(event)">
                 </label>
             </div>
-            <div class="bg-gray-50 p-2 flex gap-4 items-center">
-                <button onclick="setPenColor('#000000')" class="w-7 h-7 rounded-full bg-black border-2 border-white"></button>
-                <button onclick="setPenColor('#ff0000')" class="w-7 h-7 rounded-full bg-red-600 border-2 border-white"></button>
-                <button onclick="setPenColor('#0000ff')" class="w-7 h-7 rounded-full bg-blue-600 border-2 border-white"></button>
-                <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-white border px-2 py-1 rounded">全消去</button>
+            <div class="bg-white p-3 flex gap-5 items-center border-b">
+                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-gray-200"></button>
+                <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-gray-200"></button>
+                <button onclick="setPenColor('#0000ff')" class="w-8 h-8 rounded-full bg-blue-600 border-2 border-gray-200"></button>
+                <span class="text-[10px] text-gray-400">← 画像の上から書き込めます</span>
+                <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full font-bold">全リセット</button>
             </div>
-            <div class="canvas-container flex-grow relative bg-white overflow-hidden border-b-2 border-blue-100">
+            <div class="canvas-container flex-grow relative bg-white overflow-hidden">
+                <!-- 貼り付けた画像が表示されるレイヤー -->
                 <div id="task-image-overlay" class="absolute inset-0 z-20 pointer-events-none"></div>
+                <!-- 先生の手書きレイヤー -->
                 <canvas id="task-create-canvas" class="absolute inset-0 z-10"></canvas>
             </div>
-            <div class="p-3 bg-blue-50 text-center">
-                <button onclick="finalizeAndDistribute()" class="bg-blue-600 text-white px-10 py-3 rounded-full font-bold shadow-xl">この内容で全児童へ配信</button>
+            <div class="p-4 bg-gray-100 text-center border-t">
+                <button onclick="finalizeAndDistribute()" class="bg-green-600 hover:bg-green-700 text-white px-12 py-4 rounded-full font-black shadow-xl text-sm transition-all active:scale-95">
+                    この内容で児童に配信する
+                </button>
             </div>
         </div>
     </div>
 
-    <!-- 添削モーダル -->
+    <!-- 添削モーダル（先生専用） -->
     <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
-        <div class="flex justify-between items-center text-white mb-2 px-2">
-            <h3 class="font-bold text-sm italic">添削中</h3>
-            <div class="flex gap-2">
-                <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white"></button>
-                <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-white"></button>
-                <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-xs font-bold">戻る</button>
+        <div class="flex justify-between items-center text-white mb-3 px-4 pt-2">
+            <h3 class="font-bold text-sm">個別に添削・アドバイス</h3>
+            <div class="flex gap-4">
+                <button onclick="setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-4 border-white shadow-lg"></button>
+                <button onclick="closeFeedbackModal()" class="bg-blue-600 px-8 py-2 rounded-full text-xs font-bold shadow-md">完了して閉じる</button>
             </div>
         </div>
-        <div class="canvas-container flex-grow relative bg-white rounded-xl overflow-hidden">
-            <!-- 1. 課題画像（最背面） -->
-            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
-            <!-- 2. 児童の回答（中間） -->
-            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
-            <!-- 3. 添削用描画レイヤー（前面） -->
+        <div class="canvas-container flex-grow relative bg-white rounded-2xl overflow-hidden shadow-2xl">
+            <!-- 課題背景 -->
+            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none opacity-100"></div>
+            <!-- 児童の回答 -->
+            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none opacity-100"></div>
+            <!-- 添削書き込み -->
             <canvas id="feedback-canvas" class="absolute inset-0 z-[110]"></canvas>
         </div>
     </div>
