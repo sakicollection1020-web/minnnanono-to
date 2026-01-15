@@ -8,7 +8,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, getDoc, writeBatch, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyD2UPzm5FauzRDMUi_iv-5PQDG391xL_Eo",
@@ -97,14 +97,12 @@
 
             if (!auth) return;
 
-            // Authentication with robust error handling for custom tokens
             const initAuth = async () => {
                 try {
                     if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                         try {
                             await signInWithCustomToken(auth, __initial_auth_token);
                         } catch (tokenError) {
-                            // If custom token fails (mismatch, etc.), fall back to anonymous
                             console.warn("Custom token failed, falling back to anonymous auth", tokenError);
                             await signInAnonymously(auth);
                         }
@@ -152,21 +150,35 @@
 
             if (window.state.role === 'student') {
                 onSnapshot(getRoomDoc('submissions', window.state.user.uid), (snap) => {
+                    const feedbackLayer = document.getElementById('feedback-layer');
                     if (snap.exists()) {
                         const data = snap.data();
                         if (data.feedbackData) renderFeedback(data.feedbackData);
+                        else if (feedbackLayer) feedbackLayer.getContext('2d').clearRect(0, 0, feedbackLayer.width, feedbackLayer.height);
+                        
+                        // Teacher requested reset of student canvas
+                        if (data.canvasData === null) {
+                            const tctx = window.canvas.getContext('2d');
+                            tctx.clearRect(0, 0, window.canvas.width, window.canvas.height);
+                            // Set back to empty string to avoid loop
+                            setDoc(getRoomDoc('submissions', window.state.user.uid), { canvasData: "" }, { merge: true });
+                        }
                     }
                 }, (err) => console.error("My Submission Snap Error:", err));
             }
 
             onSnapshot(getRoomCollection('submissions'), (snap) => {
                 const list = [];
-                snap.forEach(doc => list.push(doc.data()));
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    if (d.canvasData && d.canvasData !== "") list.push(d);
+                });
                 renderSubmissionsGrid(list);
             }, (err) => console.error("Submissions Collection Error:", err));
         }
 
         function renderFeedback(dataUrl) {
+            if (!dataUrl) return;
             const img = new Image();
             img.onload = () => {
                 const feedbackLayer = document.getElementById('feedback-layer');
@@ -530,6 +542,37 @@
             }
         };
 
+        // Resets a specific student's canvas
+        window.resetStudentCanvas = async () => {
+            if (!window.state.editingStudentId) return;
+            if (confirm("この児童の回答をすべて消去しますか？")) {
+                await setDoc(getRoomDoc('submissions', window.state.editingStudentId), {
+                    canvasData: null, // Magic value to trigger reset on student side
+                    feedbackData: "",
+                    lastUpdate: Date.now()
+                }, { merge: true });
+                window.closeFeedbackModal();
+                alert("リセットしました。");
+            }
+        };
+
+        // Resets all students' canvases in the room
+        window.resetAllCanvases = async () => {
+            if (confirm("クラス全員の回答をすべて消去しますか？\n(この操作は取り消せません)")) {
+                const batch = writeBatch(window.db);
+                const querySnapshot = await getDocs(getRoomCollection('submissions'));
+                querySnapshot.forEach((doc) => {
+                    batch.update(doc.ref, { 
+                        canvasData: null, 
+                        feedbackData: "",
+                        lastUpdate: Date.now() 
+                    });
+                });
+                await batch.commit();
+                alert("全員の回答をリセットしました。");
+            }
+        };
+
         window.applyBg = () => {
             const bgs = document.querySelectorAll('.task-bg');
             bgs.forEach(bg => {
@@ -646,6 +689,13 @@
         canvas { display: block; touch-action: none; opacity: 1 !important; }
         #feedback-layer { pointer-events: none; z-index: 20; }
         .task-bg, #feedback-task-bg, #feedback-bg { background-color: white; }
+        
+        /* Teacher scroll buttons container style */
+        .teacher-scroll-menu {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .teacher-scroll-menu::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
@@ -685,10 +735,14 @@
             </div>
         </div>
 
-        <div id="teacher-view" class="hidden bg-white p-3 rounded-xl border-2 border-blue-400 flex flex-wrap gap-3 items-center mb-2 flex-shrink-0 shadow-md">
-            <button onclick="window.openTaskCreateModal()" class="bg-blue-700 text-white px-6 py-2.5 rounded-full text-xs font-bold shadow-md hover:bg-blue-800 transition-all active:scale-95">＋ 課題を新しく作る</button>
-            <div class="text-[10px] text-blue-900 bg-blue-50 p-2 rounded flex-grow border border-blue-100">
-                名前をタップして添削できます。現在のクラス: <span class="font-bold underline cursor-pointer" onclick="window.changeRoom()" id="teacher-room-display"></span>
+        <!-- Teacher Controls -->
+        <div id="teacher-view" class="hidden bg-white p-2 rounded-xl border-2 border-blue-400 flex flex-col gap-2 mb-2 flex-shrink-0 shadow-md">
+            <div class="flex gap-2 overflow-x-auto teacher-scroll-menu py-1">
+                <button onclick="window.openTaskCreateModal()" class="flex-shrink-0 bg-blue-700 text-white px-4 py-2 rounded-full text-[10px] font-bold shadow-md active:scale-95">＋ 課題作成</button>
+                <button onclick="window.resetAllCanvases()" class="flex-shrink-0 bg-red-100 text-red-700 border border-red-200 px-4 py-2 rounded-full text-[10px] font-bold active:scale-95">全員の回答をリセット</button>
+            </div>
+            <div class="text-[9px] text-blue-900 bg-blue-50 p-1.5 rounded border border-blue-100">
+                名前をタップして添削・個別削除が可能です。
             </div>
         </div>
 
@@ -729,13 +783,14 @@
         </div>
     </div>
 
-    <!-- 添削モーダル -->
+    <!-- 添削・個別削除モーダル -->
     <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="flex justify-between items-center text-white mb-3 px-4 pt-2">
             <h3 class="font-bold text-sm">ノートを添削中</h3>
-            <div class="flex gap-4">
+            <div class="flex gap-4 items-center">
                 <button onclick="window.setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-4 border-white shadow-lg"></button>
-                <button onclick="window.closeFeedbackModal()" class="bg-blue-600 px-8 py-2 rounded-full text-xs font-bold shadow-md">添削を完了</button>
+                <button onclick="window.resetStudentCanvas()" class="bg-red-600 px-4 py-2 rounded-full text-[10px] font-bold shadow-md">この回答をリセット</button>
+                <button onclick="window.closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-[10px] font-bold shadow-md">戻る</button>
             </div>
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-2xl overflow-hidden shadow-2xl">
