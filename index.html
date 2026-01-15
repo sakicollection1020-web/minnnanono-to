@@ -40,12 +40,12 @@
             brushColor: '#000000',
             brushSize: 3,
             bgImage: null,
-            editingStudentId: null // 添削中の児童ID
+            editingStudentId: null 
         };
 
         const canvas = document.getElementById('drawing-canvas');
         const ctx = canvas.getContext('2d');
-        const feedbackCanvas = document.getElementById('feedback-canvas'); // 添削用
+        const feedbackCanvas = document.getElementById('feedback-canvas');
         const fctx = feedbackCanvas?.getContext('2d');
 
         window.onload = async () => {
@@ -75,14 +75,12 @@
                 });
             } catch (error) {
                 console.error("Login Error:", error.code);
-                showToast("通信エラーが発生しました。");
             }
         };
 
         function initSync() {
             if (!db) return;
             
-            // 課題の同期
             const settingsRef = doc(db, 'class-settings', 'current');
             onSnapshot(settingsRef, (snap) => {
                 if (snap.exists()) {
@@ -94,7 +92,6 @@
                 }
             });
 
-            // 児童モード：自分のデータへの先生からの添削を監視
             if (state.role === 'student' && state.user) {
                 onSnapshot(doc(db, 'student-canvas', state.user.uid), (snap) => {
                     if (snap.exists()) {
@@ -106,7 +103,6 @@
                 });
             }
 
-            // 先生モード：全児童のデータを監視
             if (state.role === 'teacher') {
                 onSnapshot(collection(db, 'student-canvas'), (snap) => {
                     const list = [];
@@ -116,7 +112,6 @@
             }
         }
 
-        // 添削画像をレイヤーとして描画
         function renderFeedback(dataUrl) {
             const img = new Image();
             img.onload = () => {
@@ -141,7 +136,6 @@
                 }, { merge: true });
             }
             
-            // 先生が添削中の場合
             if (state.role === 'teacher' && state.editingStudentId && db) {
                 const feedbackDataUrl = feedbackCanvas.toDataURL('image/webp', 0.2);
                 await setDoc(doc(db, 'student-canvas', state.editingStudentId), {
@@ -211,18 +205,17 @@
             document.getElementById('feedback-modal-title').textContent = `${name} さんの画面を添削中`;
             document.getElementById('feedback-modal').classList.remove('hidden');
             
-            // 児童の現在の絵を背景にセット
             const snap = await getDoc(doc(db, 'student-canvas', uid));
             if (snap.exists()) {
                 const data = snap.data();
-                document.getElementById('feedback-bg').style.backgroundImage = `url(${data.canvasData})`;
-                // 既存の添削があれば読み込む
+                const bg = document.getElementById('feedback-bg');
+                bg.style.backgroundImage = `url(${data.canvasData})`;
+                
+                fctx.clearRect(0, 0, feedbackCanvas.width, feedbackCanvas.height);
                 if (data.feedbackData) {
                     const img = new Image();
                     img.onload = () => fctx.drawImage(img, 0, 0, feedbackCanvas.width, feedbackCanvas.height);
                     img.src = data.feedbackData;
-                } else {
-                    fctx.clearRect(0, 0, feedbackCanvas.width, feedbackCanvas.height);
                 }
             }
         };
@@ -275,13 +268,20 @@
             list.sort((a,b) => b.lastUpdate - a.lastUpdate);
             list.forEach(data => {
                 const div = document.createElement('div');
-                div.className = "bg-white p-2 border rounded shadow-sm cursor-pointer hover:border-blue-500 transition-colors";
-                div.onclick = () => openFeedbackModal(data.uid, data.name);
+                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 transition-all active:scale-95 relative overflow-hidden";
+                div.style.zIndex = "50"; // 確実にクリックできるように
+                
+                // data-id属性を持たせてクリック時に確実に特定
+                div.onclick = (e) => {
+                    e.preventDefault();
+                    openFeedbackModal(data.uid, data.name);
+                };
+
                 div.innerHTML = `
-                    <p class="text-[10px] font-bold truncate text-blue-700 mb-1">${data.name}</p>
-                    <div class="relative aspect-[4/3] border bg-gray-50">
+                    <p class="text-[10px] font-bold truncate text-blue-700 mb-1 pointer-events-none">${data.name}</p>
+                    <div class="relative aspect-[4/3] border bg-gray-50 pointer-events-none">
                         <img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain">
-                        ${data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain pointer-events-none">` : ''}
+                        ${data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain">` : ''}
                     </div>
                 `;
                 grid.appendChild(div);
@@ -307,19 +307,14 @@
             if (p.get('name')) state.userName = p.get('name');
         }
 
-        function showToast(msg) {
-            const t = document.getElementById('toast');
-            t.textContent = msg;
-            t.classList.replace('opacity-0', 'opacity-100');
-            setTimeout(() => t.classList.replace('opacity-100', 'opacity-0'), 5000);
-        }
-
         window.setPenColor = (c) => state.brushColor = c;
     </script>
     <style>
         .canvas-container { position: relative; width: 100%; overflow: hidden; background: white; }
         canvas { display: block; }
         #feedback-layer { pointer-events: none; z-index: 20; }
+        /* モバイルでのクリック反応を良くする */
+        .cursor-pointer { cursor: pointer; -webkit-tap-highlight-color: transparent; }
         body { touch-action: none; -webkit-user-select: none; user-select: none; }
     </style>
 </head>
@@ -334,7 +329,6 @@
             <h2 id="task-display" class="text-sm font-bold truncate italic text-gray-700"></h2>
         </div>
         
-        <!-- 児童用画面 -->
         <div id="student-view" class="flex-grow flex flex-col gap-2 overflow-hidden">
             <div class="bg-white p-2 rounded shadow flex gap-4 items-center overflow-x-auto flex-shrink-0">
                 <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white shadow"></button>
@@ -344,41 +338,37 @@
                 <button onclick="clearMyCanvas()" class="ml-auto text-xs text-gray-500 underline">消去</button>
             </div>
             <div class="canvas-container flex-grow border-2 border-gray-300 rounded-lg shadow-inner">
-                <div class="task-bg absolute inset-0 opacity-30"></div>
+                <div class="task-bg absolute inset-0 opacity-30 pointer-events-none"></div>
                 <canvas id="drawing-canvas" class="absolute inset-0 z-10"></canvas>
                 <canvas id="feedback-layer" class="absolute inset-0 z-20"></canvas>
             </div>
         </div>
 
-        <!-- 先生用画面 -->
         <div id="teacher-view" class="hidden flex-grow flex flex-col gap-2 overflow-hidden">
             <div class="bg-blue-50 p-2 rounded border border-blue-200 flex flex-wrap gap-2 items-center flex-shrink-0">
                 <input type="file" id="image-upload" accept="image/*" class="text-[10px] w-32">
                 <button onclick="distributeAssignment()" class="bg-blue-700 text-white px-3 py-1 rounded text-xs font-bold shadow">課題配信</button>
-                <p class="text-[10px] text-blue-800 ml-auto">※児童の画面をクリックして添削</p>
+                <p class="text-[10px] text-blue-800 ml-auto font-bold">児童の画面をタップで添削</p>
             </div>
-            <div id="submissions-grid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2 overflow-y-auto pb-20 p-1"></div>
+            <div id="submissions-grid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-y-auto pb-20 p-1"></div>
         </div>
     </div>
 
-    <!-- 添削用モーダル -->
-    <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-80 z-[100] hidden flex flex-col p-4">
+    <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-90 z-[100] hidden flex flex-col p-4">
         <div class="flex justify-between items-center text-white mb-2">
             <h3 id="feedback-modal-title" class="font-bold text-sm">添削中</h3>
-            <button onclick="closeFeedbackModal()" class="bg-red-600 px-4 py-1 rounded text-sm font-bold">完了して閉じる</button>
+            <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-sm font-bold shadow-lg active:bg-blue-700 transition-colors">完了</button>
         </div>
-        <div class="bg-white p-2 rounded mb-2 flex gap-4 items-center">
-            <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-white"></button>
-            <button onclick="setPenColor('#ff00ff')" class="w-8 h-8 rounded-full bg-pink-500 border-2 border-white"></button>
-            <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-white"></button>
-            <button onclick="clearMyCanvas()" class="ml-auto text-xs bg-gray-100 px-2 py-1 rounded">添削を消す</button>
+        <div class="bg-white p-3 rounded-t-xl flex gap-6 items-center flex-shrink-0">
+            <button onclick="setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-2 border-white shadow"></button>
+            <button onclick="setPenColor('#ff00ff')" class="w-10 h-10 rounded-full bg-pink-500 border-2 border-white shadow"></button>
+            <button onclick="setPenColor('#000000')" class="w-10 h-10 rounded-full bg-black border-2 border-white shadow"></button>
+            <button onclick="clearMyCanvas()" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md border border-gray-300">添削消去</button>
         </div>
-        <div class="canvas-container flex-grow rounded-lg relative bg-white">
-            <div id="feedback-bg" class="absolute inset-0 opacity-100 bg-contain bg-center bg-no-repeat"></div>
+        <div class="canvas-container flex-grow relative bg-white rounded-b-xl overflow-hidden shadow-2xl">
+            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
             <canvas id="feedback-canvas" class="absolute inset-0 z-50"></canvas>
         </div>
     </div>
-
-    <div id="toast" class="fixed top-20 left-1/2 -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded-full text-xs opacity-0 transition-opacity z-[200] w-5/6 text-center shadow-xl"></div>
 </body>
 </html>
