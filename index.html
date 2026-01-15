@@ -25,7 +25,7 @@
             auth = getAuth(app);
             db = getFirestore(app);
         } catch (e) {
-            console.error("Firebase初期化失敗", e);
+            console.error("Firebase initialization failed", e);
         }
 
         let state = {
@@ -54,7 +54,8 @@
         window.onload = async () => {
             checkUrlParams();
             
-            if (state.role === 'student' && !state.userName) {
+            // 初回起動時または名前が未設定の場合のみ名前を尋ねる
+            if (!state.userName) {
                 const savedName = localStorage.getItem('school_note_user_name');
                 const name = prompt("あなたのなまえを入力してください", savedName || "");
                 state.userName = name || "ゲスト_" + Math.floor(Math.random() * 1000);
@@ -82,7 +83,7 @@
                     }
                 });
             } catch (error) {
-                console.error("Login Error:", error.code);
+                console.error("Auth Error:", error.code);
             }
         };
 
@@ -140,7 +141,7 @@
                 const list = [];
                 snap.forEach(doc => list.push(doc.data()));
                 renderSubmissionsGrid(list);
-            });
+            }, (err) => console.error("Firestore Listen Error:", err));
         }
 
         function renderFeedback(dataUrl) {
@@ -157,7 +158,8 @@
         }
 
         async function syncCanvas() {
-            if (state.role === 'student' && state.user && db) {
+            if (!state.user || !db) return;
+            if (state.role === 'student') {
                 const dataUrl = canvas.toDataURL('image/webp', 0.5);
                 await setDoc(doc(db, 'student-canvas', state.user.uid), {
                     uid: state.user.uid,
@@ -166,7 +168,7 @@
                     lastUpdate: Date.now()
                 }, { merge: true });
             }
-            if (state.role === 'teacher' && state.editingStudentId && db) {
+            if (state.role === 'teacher' && state.editingStudentId) {
                 const feedbackDataUrl = feedbackCanvas.toDataURL('image/webp', 0.5);
                 await setDoc(doc(db, 'student-canvas', state.editingStudentId), {
                     feedbackData: feedbackDataUrl,
@@ -193,7 +195,7 @@
             if (canvas.width > 0) temp.getContext('2d').drawImage(canvas, 0, 0);
             
             canvas.width = rect.width;
-            canvas.height = availableH;
+            canvas.height = Math.max(300, availableH);
             const feedbackLayer = document.getElementById('feedback-layer');
             feedbackLayer.width = canvas.width;
             feedbackLayer.height = canvas.height;
@@ -264,17 +266,14 @@
                 state.isResizing = false;
                 state.isDraggingImage = false;
 
-                // 画像の当たり判定
                 for (let i = state.floatingImages.length - 1; i >= 0; i--) {
                     const img = state.floatingImages[i];
-                    // 右下のハンドル
                     if (pos.x > img.x + img.w - 40 && pos.x < img.x + img.w + 20 &&
                         pos.y > img.y + img.h - 40 && pos.y < img.y + img.h + 20) {
                         state.selectedImageIdx = i;
                         state.isResizing = true;
                         break;
                     }
-                    // 画像本体
                     if (pos.x > img.x && pos.x < img.x + img.w && pos.y > img.y && pos.y < img.y + img.h) {
                         state.selectedImageIdx = i;
                         state.isDraggingImage = true;
@@ -344,7 +343,6 @@
                 imgWrap.style.height = `${imgData.h}px`;
                 imgWrap.style.backgroundImage = `url(${imgData.img.src})`;
                 imgWrap.style.backgroundSize = '100% 100%';
-                imgWrap.style.opacity = "1";
                 imgWrap.style.pointerEvents = 'none'; 
 
                 if (state.selectedImageIdx === idx) {
@@ -421,16 +419,13 @@
             octx.fillRect(0, 0, offscreen.width, offscreen.height);
             
             for (let imgData of state.floatingImages) {
-                octx.globalAlpha = 1.0;
                 octx.drawImage(imgData.img, imgData.x, imgData.y, imgData.w, imgData.h);
             }
-            
-            octx.globalAlpha = 1.0;
             octx.drawImage(taskCreateCanvas, 0, 0);
             
-            const finalDataUrl = offscreen.toDataURL('image/jpeg', 0.9); 
+            const finalDataUrl = offscreen.toDataURL('image/jpeg', 0.8); 
 
-            if (confirm("この内容（画像＋手書き）で全児童に配信しますか？")) {
+            if (confirm("この内容で全児童に配信しますか？")) {
                 await setDoc(doc(db, 'class-settings', 'current'), { 
                     taskTitle: title, 
                     bgImage: finalDataUrl,
@@ -519,14 +514,14 @@
             const grid = document.getElementById('submissions-grid');
             if (!grid) return;
             grid.innerHTML = '';
-            list.sort((a,b) => b.lastUpdate - a.lastUpdate);
+            list.sort((a,b) => (b.lastUpdate || 0) - (a.lastUpdate || 0));
             list.forEach(data => {
                 const div = document.createElement('div');
-                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[180px] overflow-hidden";
+                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[180px] overflow-hidden transition-all active:scale-95";
                 
-                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10 opacity-100">` : '';
-                const canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20 opacity-100">`;
-                const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30 opacity-100">` : '';
+                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain z-10">` : '';
+                const canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20">`;
+                const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30">` : '';
 
                 div.innerHTML = `
                     <div class="absolute inset-0 z-[60] bg-transparent"></div>
@@ -546,34 +541,56 @@
             document.getElementById('task-display').textContent = state.currentTask;
             document.getElementById('role-label').textContent = state.role === 'teacher' ? "先生" : "児童";
             document.getElementById('name-label').textContent = state.userName + " さん";
+            
             const studentView = document.getElementById('student-view');
             const teacherView = document.getElementById('teacher-view');
             const submissionsView = document.getElementById('submissions-view');
             const viewSwitch = document.getElementById('view-switch');
             const publicToggleBtn = document.getElementById('public-toggle-btn');
+            
             if (state.role === 'teacher') {
                 teacherView.classList.remove('hidden');
                 studentView.classList.add('hidden');
                 submissionsView.classList.remove('hidden');
                 viewSwitch.classList.add('hidden');
                 publicToggleBtn.classList.remove('hidden');
+                publicToggleBtn.textContent = state.isPublic ? "全員公開中" : "回答を全員公開";
+                publicToggleBtn.className = state.isPublic ? "px-4 py-1.5 bg-green-600 text-white rounded-full text-[10px] font-bold" : "px-4 py-1.5 bg-blue-700 text-white rounded-full text-[10px] font-bold";
             } else {
                 teacherView.classList.add('hidden');
                 publicToggleBtn.classList.add('hidden');
                 if (state.isPublic) viewSwitch.classList.remove('hidden');
                 else { viewSwitch.classList.add('hidden'); state.viewMode = 'mine'; }
-                if (state.viewMode === 'mine') { studentView.classList.remove('hidden'); submissionsView.classList.add('hidden'); }
-                else { studentView.classList.add('hidden'); submissionsView.classList.remove('hidden'); }
+                
+                if (state.viewMode === 'mine') { 
+                    studentView.classList.remove('hidden'); 
+                    submissionsView.classList.add('hidden'); 
+                } else { 
+                    studentView.classList.add('hidden'); 
+                    submissionsView.classList.remove('hidden'); 
+                }
             }
         }
 
         function checkUrlParams() {
             const p = new URLSearchParams(window.location.search);
             state.role = p.get('role') || 'student';
-            if (p.get('name')) state.userName = p.get('name');
+            if (p.get('name')) {
+                state.userName = p.get('name');
+                localStorage.setItem('school_note_user_name', state.userName);
+            }
         }
 
         window.setPenColor = (c) => state.brushColor = c;
+        window.changeName = () => {
+            const newName = prompt("新しいなまえを入力してください", state.userName);
+            if (newName) {
+                state.userName = newName;
+                localStorage.setItem('school_note_user_name', state.userName);
+                updateUI();
+                syncCanvas();
+            }
+        };
     </script>
     <style>
         * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
@@ -581,24 +598,22 @@
         .canvas-container { position: relative; width: 100%; background: white; z-index: 10; touch-action: none; }
         canvas { display: block; touch-action: none; opacity: 1 !important; }
         #feedback-layer { pointer-events: none; z-index: 20; }
-        
-        .task-bg, #feedback-task-bg, #feedback-bg { 
-            opacity: 1 !important; 
-            background-color: white;
-        }
-        img { opacity: 1 !important; }
+        .task-bg, #feedback-task-bg, #feedback-bg { background-color: white; }
     </style>
 </head>
-<body class="bg-gray-200 flex flex-col font-sans text-gray-900 overflow-hidden">
+<body class="bg-gray-100 flex flex-col font-sans text-gray-900 overflow-hidden">
     <nav class="bg-blue-900 text-white p-3 flex justify-between items-center shadow-lg flex-shrink-0 z-50">
-        <h1 class="font-bold text-sm">EdTech Canvas Pro <span id="role-label" class="text-[10px] bg-blue-600 px-2 py-0.5 rounded-full ml-2"></span></h1>
-        <div id="name-label" class="text-xs font-medium"></div>
+        <h1 class="font-bold text-sm flex items-center gap-2">
+            EdTech Canvas Pro 
+            <span id="role-label" class="text-[10px] bg-blue-600 px-2 py-0.5 rounded-full"></span>
+        </h1>
+        <div id="name-label" class="text-xs font-medium cursor-pointer underline underline-offset-4" onclick="changeName()"></div>
     </nav>
 
     <div class="p-2 flex-grow flex flex-col overflow-hidden relative">
-        <div id="task-container" class="bg-white p-2 rounded-lg shadow mb-2 border-l-8 border-blue-600 flex justify-between items-center flex-shrink-0">
+        <div id="task-container" class="bg-white p-2 rounded-lg shadow-sm mb-2 border-l-8 border-blue-600 flex justify-between items-center flex-shrink-0">
             <h2 id="task-display" class="text-xs font-black truncate text-gray-800 max-w-[70%]"></h2>
-            <button id="public-toggle-btn" onclick="togglePublic()" class="hidden px-4 py-1.5 bg-blue-700 text-white rounded-full text-[10px] font-bold shadow-sm">回答を全員公開</button>
+            <button id="public-toggle-btn" onclick="togglePublic()" class="hidden shadow-sm"></button>
         </div>
 
         <div id="view-switch" class="hidden flex gap-2 mb-2 px-1 flex-shrink-0">
@@ -606,27 +621,30 @@
             <button onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold bg-gray-300 text-gray-600 text-sm transition-all active:scale-95">みんなのノート</button>
         </div>
         
+        <!-- 児童用描画エリア -->
         <div id="student-view" class="flex-grow flex flex-col gap-1 overflow-hidden">
             <div id="student-tools" class="bg-white p-2 rounded-t-xl shadow-md flex gap-4 items-center flex-shrink-0 z-30 border-b">
-                <button onclick="setPenColor('#000000')" class="w-9 h-9 rounded-full bg-black border-4 border-gray-100 shadow-sm"></button>
-                <button onclick="setPenColor('#ff4444')" class="w-9 h-9 rounded-full bg-red-500 border-4 border-gray-100 shadow-sm"></button>
-                <button onclick="setPenColor('#4444ff')" class="w-9 h-9 rounded-full bg-blue-500 border-4 border-gray-100 shadow-sm"></button>
-                <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[11px] text-red-500 font-bold px-3 py-1 bg-red-50 rounded-full border border-red-100">全消し</button>
+                <button onclick="setPenColor('#000000')" class="w-9 h-9 rounded-full bg-black border-4 border-gray-100 shadow-sm transition-transform active:scale-110"></button>
+                <button onclick="setPenColor('#ff4444')" class="w-9 h-9 rounded-full bg-red-500 border-4 border-gray-100 shadow-sm transition-transform active:scale-110"></button>
+                <button onclick="setPenColor('#4444ff')" class="w-9 h-9 rounded-full bg-blue-500 border-4 border-gray-100 shadow-sm transition-transform active:scale-110"></button>
+                <button onclick="clearCanvas('drawing-canvas')" class="ml-auto text-[11px] text-red-500 font-bold px-3 py-1 bg-red-50 rounded-full border border-red-100">全部消す</button>
             </div>
-            <div class="canvas-container flex-grow border-x-2 border-b-2 border-gray-300 rounded-b-xl shadow-inner relative overflow-hidden bg-white">
+            <div class="canvas-container flex-grow border-x-2 border-b-2 border-gray-200 rounded-b-xl shadow-sm relative overflow-hidden bg-white">
                 <div class="task-bg absolute inset-0 pointer-events-none"></div>
                 <canvas id="drawing-canvas" class="absolute inset-0 z-10"></canvas>
                 <canvas id="feedback-layer" class="absolute inset-0 z-20"></canvas>
             </div>
         </div>
 
-        <div id="teacher-view" class="hidden bg-white p-3 rounded-xl border-2 border-blue-400 flex flex-wrap gap-3 items-center mb-2 flex-shrink-0 shadow-lg">
-            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-6 py-2.5 rounded-full text-xs font-bold shadow-md hover:bg-blue-800 transition-colors">＋ 課題を作成して配信</button>
+        <!-- 先生用コントロール -->
+        <div id="teacher-view" class="hidden bg-white p-3 rounded-xl border-2 border-blue-400 flex flex-wrap gap-3 items-center mb-2 flex-shrink-0 shadow-md">
+            <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-6 py-2.5 rounded-full text-xs font-bold shadow-md hover:bg-blue-800 transition-all active:scale-95">＋ 課題を新しく作る</button>
             <div class="text-[10px] text-blue-900 bg-blue-50 p-2 rounded flex-grow border border-blue-100">
-                <span class="font-bold">ヒント:</span> 画像を貼り付けて、その上からペンで注釈を入れて配信できます。
+                児童の名前をタップすると、その子のノートを直接添削できます。
             </div>
         </div>
 
+        <!-- 提出一覧（先生＆全員公開時） -->
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
             <div id="submissions-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto pb-20 p-1"></div>
         </div>
@@ -636,13 +654,13 @@
     <div id="task-create-modal" class="fixed inset-0 bg-black bg-opacity-90 z-[100] hidden flex flex-col p-2 md:p-6">
         <div class="bg-white rounded-2xl flex flex-col h-full overflow-hidden shadow-2xl">
             <div class="bg-blue-800 text-white p-4 flex justify-between items-center">
-                <h3 class="font-bold text-base">課題の作成・編集</h3>
-                <button onclick="closeTaskCreateModal()" class="text-xs bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-full transition-colors">キャンセル</button>
+                <h3 class="font-bold text-base">課題の作成・配信</h3>
+                <button onclick="closeTaskCreateModal()" class="text-xs bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-full">戻る</button>
             </div>
             <div class="p-3 border-b bg-gray-50 flex flex-wrap gap-4 items-center">
-                <input type="text" id="task-title-input" placeholder="ここに課題のタイトルを入力" class="border-2 border-blue-100 p-2 rounded-lg text-sm flex-grow outline-none focus:border-blue-400">
-                <label class="bg-blue-600 text-white px-5 py-2 rounded-full cursor-pointer text-xs font-bold shadow hover:bg-blue-700">
-                    画像を挿入
+                <input type="text" id="task-title-input" placeholder="課題名（例：漢字練習）" class="border-2 border-blue-100 p-2 rounded-lg text-sm flex-grow outline-none focus:border-blue-400">
+                <label class="bg-blue-600 text-white px-5 py-2 rounded-full cursor-pointer text-xs font-bold shadow">
+                    画像を貼る
                     <input type="file" accept="image/*" class="hidden" onchange="handleTaskImageUpload(event)">
                 </label>
             </div>
@@ -650,19 +668,15 @@
                 <button onclick="setPenColor('#000000')" class="w-8 h-8 rounded-full bg-black border-2 border-gray-200"></button>
                 <button onclick="setPenColor('#ff0000')" class="w-8 h-8 rounded-full bg-red-600 border-2 border-gray-200"></button>
                 <button onclick="setPenColor('#0000ff')" class="w-8 h-8 rounded-full bg-blue-600 border-2 border-gray-200"></button>
-                <span class="text-[10px] text-gray-400">← 画像の上から書き込めます</span>
-                <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full font-bold">全リセット</button>
+                <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full font-bold">リセット</button>
             </div>
             <div class="canvas-container flex-grow relative bg-white overflow-hidden">
-                <!-- 【修正点】画像を下に、手書きを上に配置 -->
-                <!-- 画像表示レイヤー (z-index: 10) -->
                 <div id="task-image-overlay" class="absolute inset-0 z-10 pointer-events-none"></div>
-                <!-- 手書きキャンバス (z-index: 20) -->
                 <canvas id="task-create-canvas" class="absolute inset-0 z-20"></canvas>
             </div>
             <div class="p-4 bg-gray-100 text-center border-t">
                 <button onclick="finalizeAndDistribute()" class="bg-green-600 hover:bg-green-700 text-white px-12 py-4 rounded-full font-black shadow-xl text-sm transition-all active:scale-95">
-                    この内容で児童に配信する
+                    クラス全員に配信する
                 </button>
             </div>
         </div>
@@ -671,15 +685,15 @@
     <!-- 添削モーダル -->
     <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="flex justify-between items-center text-white mb-3 px-4 pt-2">
-            <h3 class="font-bold text-sm">個別に添削・アドバイス</h3>
+            <h3 class="font-bold text-sm">ノートを添削中</h3>
             <div class="flex gap-4">
                 <button onclick="setPenColor('#ff0000')" class="w-10 h-10 rounded-full bg-red-600 border-4 border-white shadow-lg"></button>
-                <button onclick="closeFeedbackModal()" class="bg-blue-600 px-8 py-2 rounded-full text-xs font-bold shadow-md">完了して閉じる</button>
+                <button onclick="closeFeedbackModal()" class="bg-blue-600 px-8 py-2 rounded-full text-xs font-bold shadow-md">添削を完了</button>
             </div>
         </div>
         <div class="canvas-container flex-grow relative bg-white rounded-2xl overflow-hidden shadow-2xl">
-            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none opacity-100"></div>
-            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none opacity-100"></div>
+            <div id="feedback-task-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
+            <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
             <canvas id="feedback-canvas" class="absolute inset-0 z-[110]"></canvas>
         </div>
     </div>
