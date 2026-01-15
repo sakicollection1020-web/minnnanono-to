@@ -125,6 +125,9 @@
                     if (state.role === 'student' && !state.isPublic) state.viewMode = 'mine';
                     applyBg();
                     updateUI();
+                    
+                    // 背景画像が変わったので一覧表示も更新が必要
+                    refreshSubmissions();
                 }
             });
 
@@ -142,6 +145,10 @@
                 snap.forEach(doc => list.push(doc.data()));
                 renderSubmissionsGrid(list);
             });
+        }
+
+        async function refreshSubmissions() {
+             // スナップショットが自動的に走りますが、手動更新が必要な場合のトリガー
         }
 
         function renderFeedback(dataUrl) {
@@ -187,15 +194,18 @@
             const windowH = window.innerHeight;
             const availableH = windowH - navH - taskH - switchH - toolH - teacherToolH - 40;
             const rect = container.getBoundingClientRect();
+            
             const temp = document.createElement('canvas');
             temp.width = canvas.width;
             temp.height = canvas.height;
             temp.getContext('2d').drawImage(canvas, 0, 0);
+            
             canvas.width = rect.width;
             canvas.height = availableH;
             const feedbackLayer = document.getElementById('feedback-layer');
             feedbackLayer.width = canvas.width;
             feedbackLayer.height = canvas.height;
+            
             canvas.getContext('2d').drawImage(temp, 0, 0, canvas.width, canvas.height);
             applyBg();
         }
@@ -264,14 +274,12 @@
 
                 for (let i = state.floatingImages.length - 1; i >= 0; i--) {
                     const img = state.floatingImages[i];
-                    // Resize handle check
                     if (pos.x > img.x + img.w - 30 && pos.x < img.x + img.w + 20 &&
                         pos.y > img.y + img.h - 30 && pos.y < img.y + img.h + 20) {
                         state.selectedImageIdx = i;
                         state.isResizing = true;
                         break;
                     }
-                    // Body check
                     if (pos.x > img.x && pos.x < img.x + img.w && pos.y > img.y && pos.y < img.y + img.h) {
                         state.selectedImageIdx = i;
                         state.isDraggingImage = true;
@@ -319,12 +327,11 @@
                 state.isDrawing = false;
                 state.isResizing = false;
                 state.isDraggingImage = false;
-                // We keep state.selectedImageIdx to show the selection border, but movement stops.
             };
 
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
-            window.addEventListener('mouseup', stop); // Use window to catch release outside canvas
+            window.addEventListener('mouseup', stop);
             targetCanvas.addEventListener('touchstart', (e) => start(e), {passive: false});
             targetCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); }, {passive: false});
             window.addEventListener('touchend', stop);
@@ -345,13 +352,11 @@
                 imgWrap.style.pointerEvents = 'none'; 
 
                 if (state.selectedImageIdx === idx) {
-                    // Resize Indicator
                     const handle = document.createElement('div');
                     handle.className = "absolute right-[-12px] bottom-[-12px] w-6 h-6 bg-blue-600 rounded-full border-2 border-white flex items-center justify-center shadow-lg pointer-events-none";
                     handle.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="white"><path d="M21 15v6h-6M9 3H3v6M21 3l-6 6M3 21l6-6"/></svg>`;
                     imgWrap.appendChild(handle);
                     
-                    // Delete Button
                     const del = document.createElement('div');
                     del.className = "absolute left-[-12px] top-[-12px] w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-[12px] font-bold cursor-pointer pointer-events-auto shadow-md";
                     del.textContent = '×';
@@ -506,13 +511,22 @@
             list.sort((a,b) => b.lastUpdate - a.lastUpdate);
             list.forEach(data => {
                 const div = document.createElement('div');
-                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[160px]";
+                div.className = "bg-white p-2 border-2 border-gray-200 rounded-lg shadow-sm cursor-pointer hover:border-blue-500 relative h-[160px] overflow-hidden";
+                
+                // 背景画像（課題内容）
+                const bgImgHtml = state.bgImage ? `<img src="${state.bgImage}" class="absolute inset-0 w-full h-full object-contain opacity-50 z-10">` : '';
+                // 児童の回答（手書き）
+                const canvasImgHtml = `<img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain z-20">`;
+                // 先生の添削（あれば）
+                const feedbackImgHtml = data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain z-30">` : '';
+
                 div.innerHTML = `
                     <div class="absolute inset-0 z-[60] bg-transparent"></div>
-                    <p class="text-[10px] font-bold truncate text-blue-700 mb-1 pointer-events-none">${data.name}</p>
+                    <p class="text-[10px] font-bold truncate text-blue-700 mb-1 pointer-events-none relative z-[70]">${data.name}</p>
                     <div class="relative aspect-[4/3] border bg-gray-50 pointer-events-none overflow-hidden h-[120px]">
-                        <img src="${data.canvasData}" class="absolute inset-0 w-full h-full object-contain">
-                        ${data.feedbackData ? `<img src="${data.feedbackData}" class="absolute inset-0 w-full h-full object-contain">` : ''}
+                        ${bgImgHtml}
+                        ${canvasImgHtml}
+                        ${feedbackImgHtml}
                     </div>
                 `;
                 div.addEventListener('click', () => openPreviewModal(data.uid, data.name));
