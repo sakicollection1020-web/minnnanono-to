@@ -41,10 +41,11 @@
             bgImage: null,
             editingStudentId: null,
             isTaskCreating: false,
-            // 課題作成時スタンプ（画像）管理
+            // 課題作成時画像管理
             floatingImages: [],
             selectedImageIdx: -1,
-            isResizing: false
+            isResizing: false,
+            isDraggingImage: false
         };
 
         const canvas = document.getElementById('drawing-canvas');
@@ -69,7 +70,6 @@
             setupEventListeners(feedbackCanvas);
             setupTaskCreateListeners(taskCreateCanvas);
 
-            // 貼り付けイベント
             document.addEventListener('paste', handlePaste);
 
             if (!auth) return;
@@ -87,7 +87,6 @@
             }
         };
 
-        // クリップボード貼り付け処理
         function handlePaste(e) {
             if (!state.isTaskCreating) return;
             const items = (e.clipboardData || e.originalEvent.clipboardData).items;
@@ -180,35 +179,27 @@
         function setupMainCanvas() {
             const container = canvas.parentElement;
             if (!container) return;
-
             const navH = document.querySelector('nav').offsetHeight;
             const taskH = document.getElementById('task-container').offsetHeight;
             const switchH = (state.role === 'student' && state.isPublic) ? document.getElementById('view-switch').offsetHeight : 0;
             const toolH = document.getElementById('student-tools')?.offsetHeight || 0;
             const teacherToolH = state.role === 'teacher' ? document.getElementById('teacher-view').offsetHeight : 0;
-            
             const windowH = window.innerHeight;
             const availableH = windowH - navH - taskH - switchH - toolH - teacherToolH - 40;
-
             const rect = container.getBoundingClientRect();
-            
             const temp = document.createElement('canvas');
             temp.width = canvas.width;
             temp.height = canvas.height;
             temp.getContext('2d').drawImage(canvas, 0, 0);
-
             canvas.width = rect.width;
             canvas.height = availableH;
-            
             const feedbackLayer = document.getElementById('feedback-layer');
             feedbackLayer.width = canvas.width;
             feedbackLayer.height = canvas.height;
-
             canvas.getContext('2d').drawImage(temp, 0, 0, canvas.width, canvas.height);
             applyBg();
         }
 
-        // 基本の描画リスナー（児童用・添削用）
         function setupEventListeners(targetCanvas) {
             const getPos = (e) => {
                 const rect = targetCanvas.getBoundingClientRect();
@@ -219,7 +210,6 @@
                     y: (clientY - rect.top) * (targetCanvas.height / rect.height)
                 };
             };
-            
             const start = (e) => {
                 if (state.role === 'student' && state.viewMode === 'others') return;
                 state.isDrawing = true;
@@ -228,7 +218,6 @@
                 tctx.beginPath();
                 tctx.moveTo(pos.x, pos.y);
             };
-
             const move = (e) => {
                 if (!state.isDrawing) return;
                 const tctx = targetCanvas.getContext('2d');
@@ -240,14 +229,12 @@
                 tctx.lineTo(pos.x, pos.y);
                 tctx.stroke();
             };
-
             const stop = () => {
                 if (state.isDrawing) {
                     state.isDrawing = false;
                     syncCanvas();
                 }
             };
-
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
             window.addEventListener('mouseup', stop);
@@ -256,7 +243,6 @@
             targetCanvas.addEventListener('touchend', stop);
         }
 
-        // 課題作成用：画像移動・リサイズ対応の高度なリスナー
         function setupTaskCreateListeners(targetCanvas) {
             let lastX, lastY;
             const getPos = (e) => {
@@ -274,20 +260,21 @@
                 lastX = pos.x; lastY = pos.y;
                 state.selectedImageIdx = -1;
                 state.isResizing = false;
+                state.isDraggingImage = false;
 
-                // 画像のハンドル判定（逆順で新しい順に判定）
                 for (let i = state.floatingImages.length - 1; i >= 0; i--) {
                     const img = state.floatingImages[i];
-                    // リサイズハンドル (右下)
-                    if (pos.x > img.x + img.w - 20 && pos.x < img.x + img.w + 10 &&
-                        pos.y > img.y + img.h - 20 && pos.y < img.y + img.h + 10) {
+                    // Resize handle check
+                    if (pos.x > img.x + img.w - 30 && pos.x < img.x + img.w + 20 &&
+                        pos.y > img.y + img.h - 30 && pos.y < img.y + img.h + 20) {
                         state.selectedImageIdx = i;
                         state.isResizing = true;
                         break;
                     }
-                    // 画像本体
+                    // Body check
                     if (pos.x > img.x && pos.x < img.x + img.w && pos.y > img.y && pos.y < img.y + img.h) {
                         state.selectedImageIdx = i;
+                        state.isDraggingImage = true;
                         break;
                     }
                 }
@@ -309,9 +296,9 @@
                 if (state.selectedImageIdx !== -1) {
                     const img = state.floatingImages[state.selectedImageIdx];
                     if (state.isResizing) {
-                        img.w += dx;
-                        img.h += dy;
-                    } else {
+                        img.w = Math.max(50, img.w + dx);
+                        img.h = Math.max(50, img.h + dy);
+                    } else if (state.isDraggingImage) {
                         img.x += dx;
                         img.y += dy;
                     }
@@ -331,41 +318,42 @@
             const stop = () => {
                 state.isDrawing = false;
                 state.isResizing = false;
+                state.isDraggingImage = false;
+                // We keep state.selectedImageIdx to show the selection border, but movement stops.
             };
 
             targetCanvas.addEventListener('mousedown', start);
             targetCanvas.addEventListener('mousemove', move);
-            window.addEventListener('mouseup', stop);
-            targetCanvas.addEventListener('touchstart', (e) => { start(e); }, {passive: false});
+            window.addEventListener('mouseup', stop); // Use window to catch release outside canvas
+            targetCanvas.addEventListener('touchstart', (e) => start(e), {passive: false});
             targetCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); }, {passive: false});
-            targetCanvas.addEventListener('touchend', stop);
+            window.addEventListener('touchend', stop);
         }
 
-        // 課題作成キャンバスの再描画（手書きは消さず、画像のみ管理するためのレイヤーが本来理想だが、今回は簡易化のためUI上に重ねる）
-        // ※実際には手書きはCanvas、画像はデータとして保持。配信時に合成。
         function drawTaskCreateCanvas() {
-            // UI上の画像ガイドを描画したい場合はここにロジックを追加
-            // 今回は配信時の合成ロジックで完結させます。
             const overlay = document.getElementById('task-image-overlay');
             overlay.innerHTML = '';
             state.floatingImages.forEach((imgData, idx) => {
                 const imgWrap = document.createElement('div');
-                imgWrap.className = `absolute border-2 ${state.selectedImageIdx === idx ? 'border-blue-500' : 'border-transparent'}`;
+                imgWrap.className = `absolute border-2 ${state.selectedImageIdx === idx ? 'border-blue-500 shadow-xl z-30' : 'border-transparent z-20'}`;
                 imgWrap.style.left = `${imgData.x}px`;
                 imgWrap.style.top = `${imgData.y}px`;
                 imgWrap.style.width = `${imgData.w}px`;
                 imgWrap.style.height = `${imgData.h}px`;
                 imgWrap.style.backgroundImage = `url(${imgData.img.src})`;
                 imgWrap.style.backgroundSize = '100% 100%';
-                imgWrap.style.pointerEvents = 'none'; // イベントはCanvas側で拾う
+                imgWrap.style.pointerEvents = 'none'; 
 
                 if (state.selectedImageIdx === idx) {
+                    // Resize Indicator
                     const handle = document.createElement('div');
-                    handle.className = "absolute right-[-10px] bottom-[-10px] w-5 h-5 bg-blue-500 rounded-full border-2 border-white";
+                    handle.className = "absolute right-[-12px] bottom-[-12px] w-6 h-6 bg-blue-600 rounded-full border-2 border-white flex items-center justify-center shadow-lg pointer-events-none";
+                    handle.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="white"><path d="M21 15v6h-6M9 3H3v6M21 3l-6 6M3 21l6-6"/></svg>`;
                     imgWrap.appendChild(handle);
                     
+                    // Delete Button
                     const del = document.createElement('div');
-                    del.className = "absolute left-[-10px] top-[-10px] w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] font-bold cursor-pointer pointer-events-auto";
+                    del.className = "absolute left-[-12px] top-[-12px] w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-[12px] font-bold cursor-pointer pointer-events-auto shadow-md";
                     del.textContent = '×';
                     del.onclick = (e) => {
                         e.stopPropagation();
@@ -385,15 +373,12 @@
             state.selectedImageIdx = -1;
             const modal = document.getElementById('task-create-modal');
             modal.classList.remove('hidden');
-
             const container = taskCreateCanvas.parentElement;
             const rect = container.getBoundingClientRect();
             taskCreateCanvas.width = rect.width;
             taskCreateCanvas.height = rect.height;
-            
             const ctx = taskCreateCanvas.getContext('2d');
             ctx.clearRect(0, 0, taskCreateCanvas.width, taskCreateCanvas.height);
-            document.getElementById('task-create-bg').style.backgroundImage = '';
             document.getElementById('task-title-input').value = "";
             drawTaskCreateCanvas();
         };
@@ -410,7 +395,6 @@
             reader.onload = (event) => {
                 const img = new Image();
                 img.onload = () => {
-                    // 背景としてではなく、移動可能な画像として追加
                     state.floatingImages.push({
                         img: img,
                         x: 50,
@@ -431,20 +415,13 @@
             offscreen.width = taskCreateCanvas.width;
             offscreen.height = taskCreateCanvas.height;
             const octx = offscreen.getContext('2d');
-
             octx.fillStyle = "white";
             octx.fillRect(0, 0, offscreen.width, offscreen.height);
-
-            // 1. 貼り付けられた画像を先に描画
             for (let imgData of state.floatingImages) {
                 octx.drawImage(imgData.img, imgData.x, imgData.y, imgData.w, imgData.h);
             }
-
-            // 2. 先生の手書きを重ねる
             octx.drawImage(taskCreateCanvas, 0, 0);
-
             const finalDataUrl = offscreen.toDataURL('image/webp', 0.5);
-            
             if (confirm("この内容で全児童に配信しますか？")) {
                 await setDoc(doc(db, 'class-settings', 'current'), { 
                     taskTitle: title, 
@@ -460,12 +437,10 @@
             state.editingStudentId = uid;
             const modal = document.getElementById('feedback-modal');
             modal.classList.remove('hidden');
-
             const container = feedbackCanvas.parentElement;
             const rect = container.getBoundingClientRect();
             feedbackCanvas.width = rect.width;
             feedbackCanvas.height = rect.height;
-            
             const snap = await getDoc(doc(db, 'student-canvas', uid));
             if (snap.exists()) {
                 const data = snap.data();
@@ -504,6 +479,7 @@
                 tctx.clearRect(0, 0, target.width, target.height);
                 if (id === 'task-create-canvas') {
                     state.floatingImages = [];
+                    state.selectedImageIdx = -1;
                     drawTaskCreateCanvas();
                 } else {
                     syncCanvas();
@@ -548,13 +524,11 @@
             document.getElementById('task-display').textContent = state.currentTask;
             document.getElementById('role-label').textContent = state.role === 'teacher' ? "先生" : "児童";
             document.getElementById('name-label').textContent = state.userName + " さん";
-            
             const studentView = document.getElementById('student-view');
             const teacherView = document.getElementById('teacher-view');
             const submissionsView = document.getElementById('submissions-view');
             const viewSwitch = document.getElementById('view-switch');
             const publicToggleBtn = document.getElementById('public-toggle-btn');
-
             if (state.role === 'teacher') {
                 teacherView.classList.remove('hidden');
                 studentView.classList.add('hidden');
@@ -564,19 +538,10 @@
             } else {
                 teacherView.classList.add('hidden');
                 publicToggleBtn.classList.add('hidden');
-                if (state.isPublic) {
-                    viewSwitch.classList.remove('hidden');
-                } else {
-                    viewSwitch.classList.add('hidden');
-                    state.viewMode = 'mine';
-                }
-                if (state.viewMode === 'mine') {
-                    studentView.classList.remove('hidden');
-                    submissionsView.classList.add('hidden');
-                } else {
-                    studentView.classList.add('hidden');
-                    submissionsView.classList.remove('hidden');
-                }
+                if (state.isPublic) viewSwitch.classList.remove('hidden');
+                else { viewSwitch.classList.add('hidden'); state.viewMode = 'mine'; }
+                if (state.viewMode === 'mine') { studentView.classList.remove('hidden'); submissionsView.classList.add('hidden'); }
+                else { studentView.classList.add('hidden'); submissionsView.classList.remove('hidden'); }
             }
         }
 
@@ -609,8 +574,8 @@
         </div>
 
         <div id="view-switch" class="hidden flex gap-2 mb-2 px-1 flex-shrink-0">
-            <button id="btn-mine" onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold bg-blue-600 text-white shadow-lg text-sm">自分の画面</button>
-            <button id="btn-others" onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold bg-gray-200 text-gray-500 text-sm">みんなの画面</button>
+            <button onclick="switchView('mine')" class="flex-1 py-3 rounded-xl font-bold bg-blue-600 text-white shadow-lg text-sm">自分の画面</button>
+            <button onclick="switchView('others')" class="flex-1 py-3 rounded-xl font-bold bg-gray-200 text-gray-500 text-sm">みんなの画面</button>
         </div>
         
         <div id="student-view" class="flex-grow flex flex-col gap-1 overflow-hidden">
@@ -629,7 +594,7 @@
 
         <div id="teacher-view" class="hidden bg-blue-50 p-2 rounded border border-blue-200 flex flex-wrap gap-2 items-center mb-2 flex-shrink-0">
             <button onclick="openTaskCreateModal()" class="bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-md">課題作成・配信</button>
-            <p class="text-[9px] text-blue-800 leading-tight">画像を貼り付け(Ctrl+V)て動かしたり、ペンで書けます。</p>
+            <p class="text-[9px] text-blue-800 leading-tight">Ctrl+Vで画像貼り付け、ドラッグで移動・リサイズ</p>
         </div>
 
         <div id="submissions-view" class="hidden flex-grow flex flex-col overflow-hidden">
@@ -641,10 +606,9 @@
     <div id="task-create-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="bg-white rounded-xl flex flex-col h-full overflow-hidden">
             <div class="bg-blue-800 text-white p-3 flex justify-between items-center">
-                <h3 class="font-bold text-sm italic">課題作成（画像を貼り付けて動かせます）</h3>
+                <h3 class="font-bold text-sm italic">課題作成</h3>
                 <button onclick="closeTaskCreateModal()" class="text-xs bg-red-500 px-3 py-1 rounded">戻る</button>
             </div>
-            
             <div class="p-2 border-b flex flex-wrap gap-3 items-center">
                 <input type="text" id="task-title-input" placeholder="課題名を入力" class="border p-2 rounded text-xs flex-grow">
                 <label class="bg-gray-100 px-3 py-1.5 rounded border cursor-pointer text-[10px] font-bold">
@@ -652,20 +616,16 @@
                     <input type="file" accept="image/*" class="hidden" onchange="handleTaskImageUpload(event)">
                 </label>
             </div>
-
             <div class="bg-gray-50 p-2 flex gap-4 items-center">
                 <button onclick="setPenColor('#000000')" class="w-7 h-7 rounded-full bg-black border-2 border-white"></button>
                 <button onclick="setPenColor('#ff0000')" class="w-7 h-7 rounded-full bg-red-600 border-2 border-white"></button>
                 <button onclick="setPenColor('#0000ff')" class="w-7 h-7 rounded-full bg-blue-600 border-2 border-white"></button>
                 <button onclick="clearCanvas('task-create-canvas')" class="ml-auto text-[10px] bg-white border px-2 py-1 rounded">全消去</button>
             </div>
-
             <div class="canvas-container flex-grow relative bg-white overflow-hidden border-b-2 border-blue-100">
-                <!-- 画像を動かすためのオーバーレイ層 -->
                 <div id="task-image-overlay" class="absolute inset-0 z-20 pointer-events-none"></div>
                 <canvas id="task-create-canvas" class="absolute inset-0 z-10"></canvas>
             </div>
-
             <div class="p-3 bg-blue-50 text-center">
                 <button onclick="finalizeAndDistribute()" class="bg-blue-600 text-white px-10 py-3 rounded-full font-bold shadow-xl">この内容で全児童へ配信</button>
             </div>
@@ -675,15 +635,10 @@
     <!-- 添削モーダル -->
     <div id="feedback-modal" class="fixed inset-0 bg-black bg-opacity-95 z-[100] hidden flex flex-col p-2">
         <div class="flex justify-between items-center text-white mb-2 px-2">
-            <h3 id="feedback-modal-title" class="font-bold text-sm italic">添削中</h3>
+            <h3 class="font-bold text-sm italic">添削中</h3>
             <button onclick="closeFeedbackModal()" class="bg-blue-600 px-6 py-2 rounded-full text-xs font-bold">戻る</button>
         </div>
-        <div id="teacher-tools" class="hidden bg-white p-3 rounded-t-xl flex gap-6 items-center flex-shrink-0">
-            <button onclick="setPenColor('#ff0000')" class="w-9 h-9 rounded-full bg-red-600 border-2 border-white shadow"></button>
-            <button onclick="setPenColor('#000000')" class="w-9 h-9 rounded-full bg-black border-2 border-white shadow"></button>
-            <button onclick="clearCanvas('feedback-canvas')" class="ml-auto text-xs bg-gray-100 px-3 py-1 rounded-md font-bold">消去</button>
-        </div>
-        <div class="canvas-container flex-grow relative bg-white rounded-b-xl overflow-hidden">
+        <div class="canvas-container flex-grow relative bg-white rounded-xl overflow-hidden">
             <div id="feedback-bg" class="absolute inset-0 bg-contain bg-center bg-no-repeat pointer-events-none"></div>
             <canvas id="feedback-canvas" class="absolute inset-0 z-[110]"></canvas>
         </div>
