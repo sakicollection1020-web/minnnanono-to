@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -19,7 +19,7 @@
             appId: "1:589337230554:web:6c564cb5bbe08573ceb9e3"
         };
 
-        // stateを即座にwindowに公開
+        // Initialize state
         window.state = {
             user: null,
             role: 'student',
@@ -53,7 +53,6 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'edtech-canvas-pro';
         window.appId = appId;
 
-        // Canvas要素をグローバルに保持
         window.getElements = () => {
             window.canvas = document.getElementById('drawing-canvas');
             window.feedbackCanvas = document.getElementById('feedback-canvas');
@@ -61,6 +60,7 @@
         };
 
         function normalizeId(str) {
+            if (!str) return "";
             return str.replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) => {
                 return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
             }).toLowerCase().replace(/\s+/g, '');
@@ -68,7 +68,7 @@
 
         window.onload = async () => {
             window.getElements();
-            checkUrlParams();
+            checkUrlParams(); 
             
             if (!window.state.roomName) {
                 const savedRoom = localStorage.getItem('school_note_room_name');
@@ -81,7 +81,7 @@
             if (!window.state.userName) {
                 const savedName = localStorage.getItem('school_note_user_name');
                 const name = prompt("あなたのなまえを入力してください", savedName || "");
-                window.state.userName = name || "ゲスト_" + Math.floor(Math.random() * 1000);
+                window.state.userName = name || (window.state.role === 'teacher' ? "先生" : "ゲスト") + "_" + Math.floor(Math.random() * 1000);
                 localStorage.setItem('school_note_user_name', window.state.userName);
             }
 
@@ -96,18 +96,35 @@
             document.addEventListener('paste', handlePaste);
 
             if (!auth) return;
-            try {
-                await signInAnonymously(auth);
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        window.state.user = user;
-                        initSync();
-                        window.updateUI();
+
+            // Authentication with robust error handling for custom tokens
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        try {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } catch (tokenError) {
+                            // If custom token fails (mismatch, etc.), fall back to anonymous
+                            console.warn("Custom token failed, falling back to anonymous auth", tokenError);
+                            await signInAnonymously(auth);
+                        }
+                    } else {
+                        await signInAnonymously(auth);
                     }
-                });
-            } catch (error) {
-                console.error("Auth Error:", error.code);
-            }
+                } catch (error) {
+                    console.error("Auth Error:", error.code, error.message);
+                }
+            };
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    window.state.user = user;
+                    initSync();
+                    window.updateUI();
+                }
+            });
+
+            await initAuth();
         };
 
         function getRoomDoc(subCol, docId) {
@@ -118,7 +135,7 @@
         }
 
         function initSync() {
-            if (!window.db) return;
+            if (!window.db || !window.state.roomName || !window.state.user) return;
 
             const settingsRef = getRoomDoc('settings', 'current');
             onSnapshot(settingsRef, (snap) => {
@@ -131,22 +148,22 @@
                     window.applyBg();
                     window.updateUI();
                 }
-            });
+            }, (err) => console.error("Settings Snap Error:", err));
 
-            if (window.state.role === 'student' && window.state.user) {
+            if (window.state.role === 'student') {
                 onSnapshot(getRoomDoc('submissions', window.state.user.uid), (snap) => {
                     if (snap.exists()) {
                         const data = snap.data();
                         if (data.feedbackData) renderFeedback(data.feedbackData);
                     }
-                });
+                }, (err) => console.error("My Submission Snap Error:", err));
             }
 
             onSnapshot(getRoomCollection('submissions'), (snap) => {
                 const list = [];
                 snap.forEach(doc => list.push(doc.data()));
                 renderSubmissionsGrid(list);
-            }, (err) => console.error("Firestore Listen Error:", err));
+            }, (err) => console.error("Submissions Collection Error:", err));
         }
 
         function renderFeedback(dataUrl) {
@@ -163,7 +180,7 @@
         }
 
         async function syncCanvas() {
-            if (!window.state.user || !window.db) return;
+            if (!window.state.user || !window.db || !window.state.roomName) return;
             if (window.state.role === 'student') {
                 const dataUrl = window.canvas.toDataURL('image/webp', 0.5);
                 await setDoc(getRoomDoc('submissions', window.state.user.uid), {
@@ -191,7 +208,7 @@
             const taskH = document.getElementById('task-container').offsetHeight;
             const switchH = (window.state.role === 'student' && window.state.isPublic) ? document.getElementById('view-switch').offsetHeight : 0;
             const toolH = document.getElementById('student-tools')?.offsetHeight || 0;
-            const teacherToolH = window.state.role === 'teacher' ? document.getElementById('teacher-view').offsetHeight : 0;
+            const teacherToolH = (window.state.role === 'teacher' && !document.getElementById('teacher-view').classList.contains('hidden')) ? document.getElementById('teacher-view').offsetHeight : 0;
             const windowH = window.innerHeight;
             const availableH = windowH - navH - taskH - switchH - toolH - teacherToolH - 40;
             const rect = container.getBoundingClientRect();
@@ -556,7 +573,7 @@
             document.getElementById('task-display').textContent = window.state.currentTask;
             document.getElementById('role-label').textContent = window.state.role === 'teacher' ? "先生" : "児童";
             document.getElementById('name-label').textContent = window.state.userName + " さん";
-            document.getElementById('room-info').textContent = "クラス: " + window.state.roomName;
+            document.getElementById('room-info').textContent = "クラス: " + (window.state.roomName || "未設定");
             
             const studentView = document.getElementById('student-view');
             const teacherView = document.getElementById('teacher-view');
@@ -585,13 +602,21 @@
         function checkUrlParams() {
             const p = new URLSearchParams(window.location.search);
             window.state.role = p.get('role') || 'student';
-            if (p.get('room')) {
-                window.state.roomName = normalizeId(p.get('room'));
+            
+            const roomParam = p.get('room');
+            if (roomParam) {
+                window.state.roomName = normalizeId(roomParam);
                 localStorage.setItem('school_note_room_name', window.state.roomName);
+            } else {
+                window.state.roomName = normalizeId(localStorage.getItem('school_note_room_name')) || '';
             }
-            if (p.get('name')) {
-                window.state.userName = p.get('name');
+
+            const nameParam = p.get('name');
+            if (nameParam) {
+                window.state.userName = nameParam;
                 localStorage.setItem('school_note_user_name', window.state.userName);
+            } else {
+                window.state.userName = localStorage.getItem('school_note_user_name') || '';
             }
         }
 
@@ -721,12 +746,11 @@
     </div>
     
     <script>
-        // 定期的にUIの状態をチェックするガード
         setInterval(() => {
             if (window.state) {
                 const display = document.getElementById('teacher-room-display');
                 if (display && display.textContent !== window.state.roomName) {
-                    display.textContent = window.state.roomName;
+                    display.textContent = window.state.roomName || "未設定";
                 }
             }
         }, 1000);
